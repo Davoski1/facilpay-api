@@ -28,6 +28,7 @@ import { AuditLogsModule } from './modules/audit-logs/audit-logs.module';
 import { EventsModule } from './modules/events/events.module';
 import { ReportsModule } from './modules/reports/reports.module';
 import { PayoutsModule } from './modules/payouts/payouts.module';
+import { AnalyticsModule } from './modules/analytics/analytics.module';
 
 @Module({
   imports: [
@@ -62,6 +63,7 @@ import { PayoutsModule } from './modules/payouts/payouts.module';
     EventsModule,
     ReportsModule,
     PayoutsModule,
+    AnalyticsModule,
   ],
   controllers: [AppController],
   providers: [AppService],
