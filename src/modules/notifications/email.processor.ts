@@ -16,6 +16,8 @@ export interface SendEmailJobData {
   paymentId?: string;
   refundId?: string;
   includeUnsubscribe?: boolean;
+  /** Recipient locale; templates fall back to English when missing. */
+  locale?: string | null;
 }
 
 @Processor('emails')

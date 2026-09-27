@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="pt">
+<head>
+  <meta charset="utf-8">
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; line-height: 1.6; color: #333; margin: 0; padding: 0; }
+    .container { max-width: 600px; margin: 0 auto; padding: 20px; }
+    .header { {{#if primaryColor}}background: {{primaryColor}};{{else}}background: #1a1a2e;{{/if}} color: white; padding: 24px; border-radius: 8px 8px 0 0; text-align: center; }
+    .header h1 { margin: 0; font-size: 24px; }
+    {{#if merchantLogo}}
+    .logo { max-width: 120px; max-height: 60px; margin-bottom: 8px; }
+    {{/if}}
+    .body { background: #fff; padding: 24px; border: 1px solid #e5e7eb; border-top: none; border-radius: 0 0 8px 8px; }
+    .amount { font-size: 32px; font-weight: bold; {{#if primaryColor}}color: {{primaryColor}};{{else}}color: #1a1a2e;{{/if}} text-align: center; margin: 16px 0; }
+    .details { background: #f9fafb; border-radius: 6px; padding: 16px; margin: 16px 0; }
+    .details dt { font-weight: 600; color: #6b7280; font-size: 12px; text-transform: uppercase; margin-top: 8px; }
+    .details dd { margin: 2px 0 0 0; }
+    .cta { display: inline-block; background: {{#if primaryColor}}{{primaryColor}}{{else}}#1a1a2e{{/if}}; color: white; padding: 12px 24px; border-radius: 6px; text-decoration: none; margin: 16px 0; }
+    .footer { text-align: center; font-size: 12px; color: #9ca3af; margin-top: 24px; padding-top: 16px; border-bottom: 1px solid #e5e7eb; }
+    .footer a { color: {{#if primaryColor}}{{primaryColor}}{{else}}#1a1a2e{{/if}}; text-decoration: none; }
+    .urgent { color: #dc2626; font-weight: bold; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      {{#if merchantLogo}}
+      <img src="{{merchantLogo}}" alt="{{merchantName}}" class="logo">
+      {{/if}}
+      <h1>Lembrete de fatura</h1>
+    </div>
+    <div class="body">
+      <p>Olá,</p>
+      <p>{{previewText}}</p>
+      <div class="amount">{{formattedAmount}}</div>
+      <dl class="details">
+        <dt>ID da fatura</dt>
+        <dd>{{paymentId}}</dd>
+        <dt>Data de vencimento</dt>
+        <dd>{{dueDate}}</dd>
+      </dl>
+      <p>Se você já pagou, desconsidere este lembrete. Caso contrário, conclua seu pagamento assim que possível.</p>
+      {{#if supportUrl}}
+      <p>Em caso de dúvidas, entre em contato com o <a href="{{supportUrl}}">suporte de {{merchantName}}</a>.</p>
+      {{/if}}
+    </div>
+    <div class="footer">
+      <p>&copy; {{year}} {{merchantName}}. Todos os direitos reservados.</p>
+      {{#if supportUrl}}<p><a href="{{supportUrl}}">Suporte</a>{{/if}} | <a href="{{unsubscribeUrl}}">Cancelar inscrição</a></p>
+    </div>
+  </div>
+</body>
+</html>

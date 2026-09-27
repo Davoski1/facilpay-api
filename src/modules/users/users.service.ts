@@ -179,6 +179,10 @@ export class UsersService {
       user.name = updateUserDto.name;
     }
 
+    if (updateUserDto.locale) {
+      user.locale = updateUserDto.locale;
+    }
+
     // Handle password change
     if (updateUserDto.password) {
       const isCurrentPasswordValid = await bcrypt.compare(

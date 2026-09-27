@@ -1,0 +1,37 @@
+<h2>Rappel de paiement à venir</h2>
+
+<p>Bonjour,</p>
+
+<p>Nous vous rappelons que votre paiement récurrent sera bientôt prélevé.</p>
+
+<table>
+  <tr>
+    <td><strong>Montant :</strong></td>
+    <td>{{formattedAmount}}</td>
+  </tr>
+  <tr>
+    <td><strong>Date :</strong></td>
+    <td>{{chargeDate}}</td>
+  </tr>
+  <tr>
+    <td><strong>Marchand :</strong></td>
+    <td>{{merchantEmail}}</td>
+  </tr>
+  {{#if planDescription}}
+  <tr>
+    <td><strong>Description :</strong></td>
+    <td>{{planDescription}}</td>
+  </tr>
+  {{/if}}
+</table>
+
+<p>
+  <a href="{{manageUrl}}">Gérer l'abonnement</a> |
+  <a href="{{cancelUrl}}">Annuler l'abonnement</a>
+</p>
+
+<p>
+  Si vous n'attendiez pas ce prélèvement ou souhaitez l'annuler, utilisez les liens ci-dessus.
+</p>
+
+<p>&copy; {{year}} FacilPay. Tous droits réservés.</p>

@@ -42,7 +42,13 @@ export class StellarService {
     this.sourceKeypair = StellarSdk.Keypair.fromSecret(secret);
   }
 
-  async sendPayment(destination: string, amount: string, memo?: string, merchantId?: string) {
+  async sendPayment(
+    destination: string,
+    amount: string,
+    memo?: string,
+    merchantId?: string,
+    asset: StellarSdk.Asset = StellarSdk.Asset.native(),
+  ) {
     try {
       const sourceAccount = await this.server.loadAccount(this.sourceKeypair.publicKey());
 
@@ -53,7 +59,7 @@ export class StellarService {
         .addOperation(
           StellarSdk.Operation.payment({
             destination,
-            asset: StellarSdk.Asset.native(),
+            asset,
             amount,
           }),
         )
@@ -139,6 +145,80 @@ export class StellarService {
         `Stellar payout account has no trustline for ${assetCode}`,
       );
     }
+  }
+
+  /**
+   * Validates a third-party payout recipient: the account must exist, hold a
+   * trustline for non-native assets and, when it sets the SEP-29
+   * `config.memo_required` data entry, the payout must carry a memo.
+   */
+  async validatePayoutRecipient(
+    address: string,
+    assetCode: string,
+    memo?: string | null,
+  ): Promise<void> {
+    if (!StellarSdk.StrKey.isValidEd25519PublicKey(address)) {
+      throw new BadRequestException('Invalid Stellar destination address');
+    }
+
+    let account: StellarSdk.Horizon.AccountResponse;
+    try {
+      account = await this.server.loadAccount(address);
+    } catch {
+      throw new BadRequestException('Destination Stellar account does not exist');
+    }
+
+    if (assetCode.toUpperCase() !== 'XLM') {
+      const hasTrustline = account.balances.some(
+        (balance: any) => balance.asset_code === assetCode.toUpperCase(),
+      );
+      if (!hasTrustline) {
+        throw new BadRequestException(
+          `Destination Stellar account has no trustline for ${assetCode}`,
+        );
+      }
+    }
+
+    const memoRequired = (account as any).data_attr?.['config.memo_required'];
+    if (memoRequired && !memo) {
+      throw new BadRequestException('Destination account requires a memo');
+    }
+  }
+
+  /**
+   * Sends a payout from the platform account. Non-native assets are sent with
+   * the issuer of the matching balance held by the platform account.
+   */
+  async sendPayout(params: {
+    destination: string;
+    amount: string;
+    assetCode: string;
+    memo?: string | null;
+    merchantId?: string;
+  }) {
+    const assetCode = params.assetCode.toUpperCase();
+    let asset = StellarSdk.Asset.native();
+
+    if (assetCode !== 'XLM') {
+      const source = await this.server.loadAccount(this.sourceKeypair.publicKey());
+      const balance = source.balances.find(
+        (b: any) => b.asset_code === assetCode && b.asset_issuer,
+      ) as { asset_issuer: string } | undefined;
+      if (!balance) {
+        throw new BadRequestException(
+          `Platform account does not hold ${assetCode}`,
+        );
+      }
+      asset = new StellarSdk.Asset(assetCode, balance.asset_issuer);
+    }
+
+    return this.sendPayment(
+      params.destination,
+      params.amount,
+      params.memo ?? undefined,
+      params.merchantId,
+      asset,
+    );
   }
 
   async listTransactions(status?: MultiSigTransactionStatus): Promise<MultiSigTransaction[]> {

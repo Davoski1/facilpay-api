@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html>
+<html lang="pt">
 <head>
   <meta charset="utf-8">
   <style>
@@ -20,31 +20,31 @@
 <body>
   <div class="container">
     <div class="header">
-      <h1>Dispute Opened</h1>
+      <h1>Disputa aberta</h1>
     </div>
     <div class="body">
-      <p>Hello{{#if payerName}} {{payerName}}{{/if}},</p>
+      <p>Olá{{#if payerName}} {{payerName}}{{/if}},</p>
       <div class="info">
-        <strong>Dispute Received:</strong> Your dispute has been successfully opened and is being processed.
+        <strong>Disputa recebida:</strong> sua disputa foi aberta com sucesso e está sendo processada.
       </div>
       <dl class="details">
-        <dt>Dispute ID</dt>
+        <dt>ID da disputa</dt>
         <dd>{{disputeId}}</dd>
-        <dt>Payment ID</dt>
+        <dt>ID do pagamento</dt>
         <dd>{{paymentId}}</dd>
-        <dt>Disputed Amount</dt>
-        <dd>{{paymentAmount}} {{paymentCurrency}}</dd>
-        {{#if disputeReason}}<dt>Reason</dt>
-        <dd>{{disputeReason}}{{/if}}
+        <dt>Valor contestado</dt>
+        <dd>{{formattedAmount}}</dd>
+        {{#if disputeReason}}<dt>Motivo</dt>
+        <dd>{{disputeReason}}</dd>{{/if}}
       </dl>
-      <p>We will review your dispute and notify you of any updates. This process typically takes 5-10 business days.</p>
+      <p>Analisaremos sua disputa e avisaremos sobre qualquer atualização. Esse processo normalmente leva de 5 a 10 dias úteis.</p>
       <p style="text-align: center; margin-top: 24px;">
-        <a href="{{appUrl}}/disputes/{{disputeId}}" style="background: #4F46E5; color: white; padding: 12px 24px; border-radius: 6px; text-decoration: none; font-weight: 600;">View Dispute Status</a>
+        <a href="{{appUrl}}/disputes/{{disputeId}}" style="background: #4F46E5; color: white; padding: 12px 24px; border-radius: 6px; text-decoration: none; font-weight: 600;">Ver status da disputa</a>
       </p>
     </div>
     <div class="footer">
-      <p>&copy; {{year}} FacilPay. All rights reserved.</p>
-      <p><a href="{{appUrl}}">FacilPay Dashboard</a></p>
+      <p>&copy; {{year}} FacilPay. Todos os direitos reservados.</p>
+      <p><a href="{{appUrl}}">Painel FacilPay</a></p>
     </div>
   </div>
 </body>

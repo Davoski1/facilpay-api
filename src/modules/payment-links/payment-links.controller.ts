@@ -11,6 +11,7 @@ import {
   HttpStatus,
   UseGuards,
   Request,
+  Headers,
 } from '@nestjs/common';
 import {
   ApiTags,
@@ -34,6 +35,10 @@ import { PaymentLink } from './payment-link.entity';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { Public } from '../auth/decorators/public.decorator';
 import { PaginationDto } from '../../common/dto/pagination.dto';
+import {
+  DEFAULT_LOCALE,
+  resolveLocaleFromAcceptLanguage,
+} from '../notifications/i18n/locale';
 
 @ApiTags('payment-links')
 @Controller('v1/payment-links')
@@ -73,15 +78,23 @@ export class PaymentLinksController {
   @Post(':tokenOrSlug/redeem')
   @ApiOperation({
     summary: 'Redeem a payment link',
-    description: 'Validates the link and, for flexible-amount links, requires a payer-supplied amount. Links at their completion limit are deactivated.',
+    description: 'Validates the link and, for flexible-amount links, requires a payer-supplied amount. Links at their completion limit are deactivated. The response includes `payerLocale`, resolved from the Accept-Language header, to pass on when creating the payment so payer emails are localised.',
   })
   @ApiParam({ name: 'tokenOrSlug', description: '16-byte hex token or custom slug from the payment link URL' })
   @ApiOkResponse({ description: 'Payment link ready for checkout.' })
   @ApiResponse({ status: 400, description: 'payerAmount missing, below minAmount, or missing required payer fields.' })
   @ApiNotFoundResponse({ description: 'Link not found.' })
   @ApiResponse({ status: 410, description: 'Link expired or deactivated.' })
-  redeemLink(@Param('tokenOrSlug') tokenOrSlug: string, @Body() dto: RedeemPaymentLinkDto) {
-    return this.service.redeemLink(tokenOrSlug, dto);
+  async redeemLink(
+    @Param('tokenOrSlug') tokenOrSlug: string,
+    @Body() dto: RedeemPaymentLinkDto,
+    @Headers('accept-language') acceptLanguage?: string,
+  ) {
+    const link = await this.service.redeemLink(tokenOrSlug, dto);
+    return {
+      ...link,
+      payerLocale: resolveLocaleFromAcceptLanguage(acceptLanguage) ?? DEFAULT_LOCALE,
+    };
   }
 
   @Public()

@@ -36,6 +36,7 @@ import { AppLogger } from '../logger/logger.service';
 import { Logger } from 'pino';
 import { PaymentSseService } from './payment-sse.service';
 import { EmailNotificationService } from '../notifications/email-notification.service';
+import { normalizeLocale } from '../notifications/i18n/locale';
 import { WebhooksService } from '../webhooks/webhooks.service';
 import { StellarService } from '../stellar/stellar.service';
 import { UsersService } from '../users/users.service';
@@ -302,6 +303,9 @@ export class PaymentsService {
         recurringPaymentId: recurringPaymentId ?? null,
         merchantEmail: createPaymentDto.merchantEmail || null,
         payerEmail: createPaymentDto.payerEmail || null,
+        payerLocale: createPaymentDto.payerLocale
+          ? normalizeLocale(createPaymentDto.payerLocale)
+          : null,
         feeAmount: fee.feeAmount,
         netAmount: fee.netAmount,
         feeBreakdown: fee.feeBreakdown,
@@ -1582,6 +1586,7 @@ export class PaymentsService {
           String(payment.amount),
           payment.currency,
           payment.description,
+          payment.payerLocale,
         )
         .catch(() => {});
     }
@@ -1699,6 +1704,7 @@ export class PaymentsService {
           String(refund.amount),
           payment.currency,
           refund.reason,
+          payment.payerLocale,
         )
         .catch(() => {});
     }
