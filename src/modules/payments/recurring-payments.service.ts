@@ -5,7 +5,7 @@ import {
   BadRequestException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { LessThanOrEqual, Repository } from 'typeorm';
+import { LessThanOrEqual, MoreThanOrEqual, Repository } from 'typeorm';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import {
   RecurringPayment,
@@ -19,8 +19,14 @@ import { IdempotencyService } from './idempotency.service';
 import { AppLogger } from '../logger/logger.service';
 import { Logger } from 'pino';
 import { WebhooksService } from '../webhooks/webhooks.service';
-import { Customer } from '../customers/customer.entity';
-import { resolveCustomerForMerchant } from '../customers/customer-ownership';
+import { EmailNotificationService } from '../notifications/email-notification.service';
+import { ConfigService } from '@nestjs/config';
+import { PaginationDto } from '../../common/dto/pagination.dto';
+import { PaginatedResult } from '../../common/interfaces/paginated-result.interface';
+import {
+  RecurringPaymentCharge,
+  RecurringPaymentChargeStatus,
+} from './recurring-payment-charge.entity';
 
 @Injectable()
 export class RecurringPaymentsService {
@@ -30,9 +36,13 @@ export class RecurringPaymentsService {
   constructor(
     @InjectRepository(RecurringPayment)
     private readonly recurringPaymentRepository: Repository<RecurringPayment>,
+    @InjectRepository(RecurringPaymentCharge)
+    private readonly recurringPaymentChargeRepository: Repository<RecurringPaymentCharge>,
     private readonly paymentsService: PaymentsService,
     private readonly idempotencyService: IdempotencyService,
     private readonly webhooksService: WebhooksService,
+    private readonly emailNotificationService: EmailNotificationService,
+    private readonly configService: ConfigService,
     appLogger: AppLogger,
   ) {
     this.logger = appLogger.child({ module: RecurringPaymentsService.name });
@@ -49,20 +59,13 @@ export class RecurringPaymentsService {
       throw new BadRequestException('endAt must be in the future');
     }
 
-    let customerId: string | null = null;
-    let merchantId = dto.merchantId ?? null;
-    if (dto.customerId) {
-      const customer = await resolveCustomerForMerchant(
-        this.recurringPaymentRepository.manager.getRepository(Customer),
-        dto.customerId,
-        createdBy,
-        dto.merchantId,
-      );
-      customerId = customer.id;
-      merchantId = customer.merchantId;
-    }
-
-    const nextRunAt = dto.startAt ? new Date(dto.startAt) : new Date();
+    const trialDays = dto.trialDays ?? 0;
+    const trialStartAt = dto.startAt ? new Date(dto.startAt) : new Date();
+    const trialEndsAt =
+      trialDays > 0
+        ? new Date(trialStartAt.getTime() + trialDays * 24 * 60 * 60 * 1000)
+        : null;
+    const nextRunAt = trialEndsAt ?? trialStartAt;
     const plan = this.recurringPaymentRepository.create({
       amount: dto.amount,
       currency: dto.currency,
@@ -75,11 +78,18 @@ export class RecurringPaymentsService {
       callbackUrl: dto.callbackUrl ?? null,
       metadata: dto.metadata ?? null,
       createdBy,
-      status: RecurringPaymentStatus.ACTIVE,
+      status: trialEndsAt
+        ? RecurringPaymentStatus.TRIALING
+        : RecurringPaymentStatus.ACTIVE,
       endAt: dto.endAt ? new Date(dto.endAt) : null,
       maxOccurrences: dto.maxOccurrences ?? null,
-      occurrences: 0,
+      notifyDaysBefore: dto.notifyDaysBefore ?? 3,
       consecutiveFailures: 0,
+      occurrences: 0,
+      lastNotifiedCycle: null,
+      trialDays,
+      trialEndsAt,
+      trialEndingNotifiedAt: null,
       nextRunAt,
     });
 
@@ -102,6 +112,28 @@ export class RecurringPaymentsService {
       throw new NotFoundException(`Recurring payment plan ${id} not found`);
     }
     return plan;
+  }
+
+  async findCharges(
+    id: string,
+    createdBy: string,
+    pagination: PaginationDto,
+  ): Promise<PaginatedResult<RecurringPaymentCharge>> {
+    const plan = await this.findOne(id, createdBy);
+    const page = pagination.page ?? 1;
+    const limit = pagination.limit ?? 20;
+    const [data, total] = await this.recurringPaymentChargeRepository
+      .createQueryBuilder('charge')
+      .where('charge.recurringPaymentId = :recurringPaymentId', {
+        recurringPaymentId: plan.id,
+      })
+      .orderBy('charge.attemptedAt', 'ASC')
+      .addOrderBy('charge.id', 'ASC')
+      .skip((page - 1) * limit)
+      .take(limit)
+      .getManyAndCount();
+
+    return { data, total, page, limit };
   }
 
   async update(
@@ -181,10 +213,16 @@ export class RecurringPaymentsService {
   @Cron(CronExpression.EVERY_MINUTE)
   async processDuePlans(): Promise<void> {
     const duePlans = await this.recurringPaymentRepository.find({
-      where: {
-        status: RecurringPaymentStatus.ACTIVE,
-        nextRunAt: LessThanOrEqual(new Date()),
-      },
+      where: [
+        {
+          status: RecurringPaymentStatus.ACTIVE,
+          nextRunAt: LessThanOrEqual(new Date()),
+        },
+        {
+          status: RecurringPaymentStatus.TRIALING,
+          nextRunAt: LessThanOrEqual(new Date()),
+        },
+      ],
     });
 
     for (const plan of duePlans) {
@@ -195,8 +233,24 @@ export class RecurringPaymentsService {
   private async executePlan(plan: RecurringPayment): Promise<void> {
     const scheduledFor = plan.nextRunAt;
     const idempotencyKey = `recurring-payment:${plan.id}:${scheduledFor.toISOString()}`;
+    let chargeAttempt: RecurringPaymentCharge | null = null;
 
     try {
+      if (plan.status === RecurringPaymentStatus.TRIALING) {
+        plan.status = RecurringPaymentStatus.ACTIVE;
+      }
+
+      chargeAttempt = await this.recurringPaymentChargeRepository.save(
+        this.recurringPaymentChargeRepository.create({
+          recurringPaymentId: plan.id,
+          cycleNumber: (plan.occurrences ?? 0) + 1,
+          paymentId: null,
+          amount: plan.amount,
+          status: RecurringPaymentChargeStatus.PENDING,
+          failureReason: null,
+        }),
+      );
+
       const requestBody = {
         planId: plan.id,
         scheduledFor: scheduledFor.toISOString(),
@@ -206,6 +260,7 @@ export class RecurringPaymentsService {
         requestBody,
       );
 
+      let paymentId: string;
       if (!existing) {
         const paymentDto = {
           amount: plan.amount,
@@ -217,18 +272,22 @@ export class RecurringPaymentsService {
           payerEmail: plan.payerEmail ?? undefined,
           callbackUrl: plan.callbackUrl ?? undefined,
           metadata: plan.metadata ?? undefined,
-        };
-        const payment = plan.customerId
-          ? await this.paymentsService.create(
-              paymentDto,
-              plan.merchantId ?? undefined,
-            )
-          : await this.paymentsService.create(paymentDto);
+        }, plan.id);
+        paymentId = payment.id;
+      } else {
+        paymentId = existing.paymentId;
+      }
+
+      chargeAttempt.paymentId = paymentId;
+      chargeAttempt.status = RecurringPaymentChargeStatus.SUCCEEDED;
+      await this.recurringPaymentChargeRepository.save(chargeAttempt);
+
+      if (!existing) {
         await this.idempotencyService.storeKey(idempotencyKey, requestBody, {
-          paymentId: payment.id,
+          paymentId,
         });
         this.logger.info(
-          { planId: plan.id, paymentId: payment.id },
+          { planId: plan.id, paymentId },
           'Recurring payment charge created',
         );
       }
@@ -260,6 +319,17 @@ export class RecurringPaymentsService {
       const consecutiveFailures = (plan.consecutiveFailures ?? 0) + 1;
       plan.consecutiveFailures = consecutiveFailures;
 
+      if (
+        chargeAttempt &&
+        chargeAttempt.status === RecurringPaymentChargeStatus.PENDING
+      ) {
+        chargeAttempt.status = RecurringPaymentChargeStatus.FAILED;
+        chargeAttempt.failureReason = (
+          error instanceof Error ? error.message : String(error)
+        ).slice(0, 4000);
+        await this.recurringPaymentChargeRepository.save(chargeAttempt);
+      }
+
       this.logger.error(
         {
           planId: plan.id,
@@ -286,28 +356,104 @@ export class RecurringPaymentsService {
     }
   }
 
-  private async notifyPlanPaused(plan: RecurringPayment): Promise<void> {
-    if (!plan.merchantId) {
+  @Cron(CronExpression.EVERY_MINUTE)
+  async notifyTrialEnding(): Promise<void> {
+    const plans = await this.recurringPaymentRepository.find({
+      where: { status: RecurringPaymentStatus.TRIALING },
+    });
+    const now = new Date();
+    const notificationDeadline = new Date(now.getTime() + 3 * 24 * 60 * 60 * 1000);
+
+    for (const plan of plans) {
+      if (
+        !plan.merchantId ||
+        !plan.trialEndsAt ||
+        plan.trialEndingNotifiedAt ||
+        plan.trialEndsAt.getTime() <= now.getTime() ||
+        plan.trialEndsAt.getTime() > notificationDeadline.getTime()
+      ) {
+        continue;
+      }
+
+      await this.webhooksService.dispatchEventToMerchant(
+        plan.merchantId,
+        'recurring.trial_ending',
+        {
+          planId: plan.id,
+          trialEndsAt: plan.trialEndsAt,
+        },
+      );
+      plan.trialEndingNotifiedAt = now;
+      await this.recurringPaymentRepository.save(plan);
+    }
+  }
+
+  private async notifyPayer(plan: RecurringPayment): Promise<void> {
+    if (!plan.payerEmail || plan.notifyDaysBefore === 0 || !plan.merchantEmail) {
       return;
     }
 
-    try {
-      await this.webhooksService.dispatchEventToMerchant(plan.merchantId, 'recurring_payment.paused', {
-        planId: plan.id,
-        amount: plan.amount,
-        currency: plan.currency,
-        consecutiveFailures: plan.consecutiveFailures,
-        status: plan.status,
-      });
-    } catch (error) {
-      this.logger.error(
-        {
-          planId: plan.id,
-          merchantId: plan.merchantId,
-          error: error instanceof Error ? error.message : error,
-        },
-        'Recurring payment pause notification failed',
-      );
+    const appUrl = this.configService.get<string>('APP_URL', 'http://localhost:3000');
+    const manageUrl = `${appUrl}/recurring/${plan.id}`;
+    const cancelUrl = `${appUrl}/recurring/${plan.id}/cancel`;
+
+    await this.emailNotificationService.sendPayerRecurringPaymentReminder(
+      plan.payerEmail,
+      null,
+      plan.id,
+      String(plan.amount),
+      plan.currency,
+      plan.nextRunAt,
+      plan.merchantEmail,
+      manageUrl,
+      cancelUrl,
+      plan.description,
+    );
+  }
+
+  /**
+   * Cron job to notify payers before upcoming recurring charges.
+   * Runs daily to find plans whose next charge is within the notification window.
+   * Sends at most one notification per cycle (tracked by lastNotifiedCycle).
+   */
+  @Cron(CronExpression.EVERY_DAY_AT_8AM)
+  async notifyUpcomingCharges(): Promise<void> {
+    const plans = await this.recurringPaymentRepository.find({
+      where: {
+        status: RecurringPaymentStatus.ACTIVE,
+        notifyDaysBefore: MoreThanOrEqual(1),
+      },
+    });
+
+    const now = new Date();
+    const notifiedCycleNumbers = new Set<string>(); // track already-notified plans
+
+    for (const plan of plans) {
+      const cycleNumber = this.getCycleNumber(plan);
+      const key = `${plan.id}:${cycleNumber}`;
+
+      // Skip if already notified for this cycle
+      if (plan.lastNotifiedCycle === cycleNumber || notifiedCycleNumbers.has(key)) {
+        continue;
+      }
+
+      const daysUntilCharge = this.getDaysUntilCharge(plan.nextRunAt, now);
+
+      if (daysUntilCharge <= plan.notifyDaysBefore && daysUntilCharge >= 0) {
+        await this.notifyPayer(plan);
+        plan.lastNotifiedCycle = cycleNumber;
+        await this.recurringPaymentRepository.save(plan);
+        notifiedCycleNumbers.add(key);
+      }
     }
+  }
+
+  private getCycleNumber(plan: RecurringPayment): number {
+    return plan.occurrences + 1;
+  }
+
+  private getDaysUntilCharge(nextRunAt: Date, from: Date): number {
+    const diff = nextRunAt.getTime() - from.getTime();
+    return Math.ceil(diff / (1000 * 60 * 60 * 24));
   }
 }

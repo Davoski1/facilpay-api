@@ -22,9 +22,11 @@ import { RatesModule } from './modules/rates/rates.module';
 import { MerchantsModule } from './modules/merchants/merchants.module';
 import { OnboardingModule } from './modules/onboarding/onboarding.module';
 import { SessionsModule } from './modules/sessions/sessions.module';
+import { CheckoutSessionsModule } from './modules/checkout-sessions/checkout-sessions.module';
 import { SecurityHeadersMiddleware } from './common/middleware/security-headers.middleware';
 import { AuditLogsModule } from './modules/audit-logs/audit-logs.module';
-import { CustomersModule } from './modules/customers/customers.module';
+import { EventsModule } from './modules/events/events.module';
+import { ReportsModule } from './modules/reports/reports.module';
 
 @Module({
   imports: [
@@ -56,7 +58,8 @@ import { CustomersModule } from './modules/customers/customers.module';
     MerchantsModule,
     OnboardingModule,
     AuditLogsModule,
-    CustomersModule,
+    EventsModule,
+    ReportsModule,
   ],
   controllers: [AppController],
   providers: [AppService],
