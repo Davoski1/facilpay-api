@@ -189,4 +189,5 @@ Environment variables:
 
 ## 📚 Documentation
 
-- [Errors](docs/ERRORS.md) — error response format and common status codes
+- [Sessions](docs/SESSIONS.md) — session listing and revocation
+
