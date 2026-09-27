@@ -189,4 +189,5 @@ Environment variables:
 
 ## 📚 Documentation
 
-- [Contributing](CONTRIBUTING.md) — setup, conventions, PR checklist
+- [Sessions](docs/SESSIONS.md) — session listing and revocation
+
