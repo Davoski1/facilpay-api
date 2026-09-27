@@ -189,4 +189,5 @@ Environment variables:
 
 ## 📚 Documentation
 
-- [Environment](docs/ENVIRONMENT.md) — configuration variables reference
+- [Sessions](docs/SESSIONS.md) — session listing and revocation
+
