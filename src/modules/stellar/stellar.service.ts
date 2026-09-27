@@ -383,4 +383,81 @@ export class StellarService {
       };
     });
   }
+
+  async validateAddress(address: string, assetCode?: string): Promise<{
+    valid: boolean;
+    format: 'g' | 'm' | null;
+    exists: boolean;
+    hasTrustline: boolean;
+    requiresMemo: boolean;
+    error?: string;
+  }> {
+    // Check address format
+    const isValidEd25519 = StellarSdk.StrKey.isValidEd25519PublicKey(address);
+    const isValidMuxed = StellarSdk.StrKey.isValidMuxedAccount(address);
+
+    if (!isValidEd25519 && !isValidMuxed) {
+      return {
+        valid: false,
+        format: null,
+        exists: false,
+        hasTrustline: false,
+        requiresMemo: false,
+        error: 'Invalid Stellar address format',
+      };
+    }
+
+    const format = isValidMuxed ? 'm' : 'g';
+
+    // Check if account exists on network
+    let account: StellarSdk.Horizon.AccountResponse | null = null;
+    const accountAddress = isValidMuxed
+      ? StellarSdk.MuxedAccount.fromAddress(address, '0').accountId()
+      : address;
+
+    try {
+      account = await this.getServer().loadAccount(accountAddress);
+    } catch (error: any) {
+      if (error.status === 404) {
+        return {
+          valid: false,
+          format,
+          exists: false,
+          hasTrustline: false,
+          requiresMemo: false,
+          error: 'Account does not exist on network',
+        };
+      }
+      throw error;
+    }
+
+    // Check trustline if asset is specified
+    let hasTrustline = true;
+    if (assetCode && assetCode.toUpperCase() !== 'XLM') {
+      hasTrustline = account.balances.some(
+        (b: any) => b.asset_code === assetCode.toUpperCase(),
+      );
+    }
+
+    // Check SEP-29 memo requirement
+    let requiresMemo = false;
+    try {
+      const response = await fetch(`${this.configService.get<string>('STELLAR_HORIZON_URL')}/accounts/${accountAddress}`);
+      const data = await response.json();
+      const config = data.data_attr?.config;
+      if (config) {
+        requiresMemo = config.includes('memo_required');
+      }
+    } catch {
+      // Ignore SEP-29 check failure
+    }
+
+    return {
+      valid: true,
+      format,
+      exists: true,
+      hasTrustline,
+      requiresMemo,
+    };
+  }
 }
