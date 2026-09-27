@@ -16,7 +16,7 @@ import {
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { ConfigService } from '@nestjs/config';
 import { Payment, PaymentStatus } from './payment.entity';
-import { Refund } from './refund.entity';
+import { Refund, RefundReasonCode } from './refund.entity';
 import { Dispute, DisputeStatus } from './dispute.entity';
 import { PaymentSplit, PaymentSplitStatus } from './payment-split.entity';
 import { MerchantFeeConfig } from './merchant-fee-config.entity';
@@ -40,11 +40,7 @@ import { WebhooksService } from '../webhooks/webhooks.service';
 import { StellarService } from '../stellar/stellar.service';
 import { UsersService } from '../users/users.service';
 import { SettlementAdjustment } from '../settlements/entities/settlement-adjustment.entity';
-import {
-  LedgerAccount,
-  LedgerReferenceType,
-} from '../ledger/ledger-entry.entity';
-import { appendLedgerTransaction } from '../ledger/ledger-transaction';
+import { EventsService } from '../events/events.service';
 
 const DEFAULT_PAYMENT_EXPIRY_SECONDS = 1800;
 const DEFAULT_MAX_REFUNDS_PER_PAYMENT = 20;
@@ -75,6 +71,7 @@ export class PaymentsService {
     private readonly stellarService: StellarService,
     private readonly usersService: UsersService,
     private readonly paymentLinksService: PaymentLinksService,
+    private readonly eventsService: EventsService,
   ) {
     this.logger = appLogger.child({ module: PaymentsService.name });
   }
@@ -257,23 +254,44 @@ export class PaymentsService {
    * @param idempotencyKey - Optional idempotency key for request deduplication
    * @returns Created payment
    */
-  async create(createPaymentDto: CreatePaymentDto): Promise<Payment> {
+  async create(
+    createPaymentDto: CreatePaymentDto,
+    recurringPaymentId?: string,
+  ): Promise<Payment> {
     const queryRunner = this.dataSource.createQueryRunner();
 
     try {
       await queryRunner.connect();
       await queryRunner.startTransaction();
 
+      let merchantId = createPaymentDto.merchantId;
+      if (createPaymentDto.customerId) {
+        const expectedMerchantId =
+          authenticatedMerchantId ?? createPaymentDto.merchantId;
+        if (!expectedMerchantId) {
+          throw new BadRequestException(
+            'A merchant is required when customerId is provided',
+          );
+        }
+        const customer = await resolveCustomerForMerchant(
+          this.paymentRepository.manager.getRepository(Customer),
+          createPaymentDto.customerId,
+          expectedMerchantId,
+          createPaymentDto.merchantId,
+        );
+        merchantId = customer.merchantId;
+      }
+
       this.logger.debug(
         `Starting payment creation transaction for amount: ${createPaymentDto.amount}`,
       );
 
       // Validate merchantId if provided
-      await this.validateMerchantId(createPaymentDto.merchantId);
+      await this.validateMerchantId(merchantId);
 
-      await this.ensurePaymentLimits(createPaymentDto);
+      await this.ensurePaymentLimits({ ...createPaymentDto, merchantId });
       const fee = await this.calculateFee(
-        createPaymentDto.merchantId,
+        merchantId,
         Number(createPaymentDto.amount),
       );
       const expiresInSeconds =
@@ -281,6 +299,7 @@ export class PaymentsService {
 
       const payment = queryRunner.manager.create(Payment, {
         ...createPaymentDto,
+        recurringPaymentId: recurringPaymentId ?? null,
         merchantEmail: createPaymentDto.merchantEmail || null,
         payerEmail: createPaymentDto.payerEmail || null,
         feeAmount: fee.feeAmount,
@@ -328,6 +347,7 @@ export class PaymentsService {
 
   async createBulk(
     createPaymentDtos: CreatePaymentDto[],
+    authenticatedMerchantId?: string,
   ): Promise<{ created: number; payments: Payment[] }> {
     const queryRunner = this.dataSource.createQueryRunner();
 
@@ -335,16 +355,42 @@ export class PaymentsService {
       await queryRunner.connect();
       await queryRunner.startTransaction();
 
+      const resolvedPaymentDtos = await Promise.all(
+        createPaymentDtos.map(async (createPaymentDto) => {
+          if (!createPaymentDto.customerId) return createPaymentDto;
+
+          const expectedMerchantId =
+            authenticatedMerchantId ?? createPaymentDto.merchantId;
+          if (!expectedMerchantId) {
+            throw new BadRequestException(
+              'A merchant is required when customerId is provided',
+            );
+          }
+
+          const customer = await resolveCustomerForMerchant(
+            this.paymentRepository.manager.getRepository(Customer),
+            createPaymentDto.customerId,
+            expectedMerchantId,
+            createPaymentDto.merchantId,
+          );
+
+          return {
+            ...createPaymentDto,
+            merchantId: customer.merchantId,
+          };
+        }),
+      );
+
       this.logger.debug(
         `Starting bulk payment creation transaction for ${
-          createPaymentDtos.length
+          resolvedPaymentDtos.length
         } items.`,
       );
 
       // Validate all merchantIds upfront
       const uniqueMerchantIds = [
         ...new Set(
-          createPaymentDtos
+          resolvedPaymentDtos
             .map((dto) => dto.merchantId)
             .filter((id): id is string => id !== undefined),
         ),
@@ -355,7 +401,7 @@ export class PaymentsService {
       }
 
       const paymentPayloads = await Promise.all(
-        createPaymentDtos.map(async (createPaymentDto) => {
+        resolvedPaymentDtos.map(async (createPaymentDto) => {
           await this.ensurePaymentLimits(createPaymentDto);
           const fee = await this.calculateFee(
             createPaymentDto.merchantId,
@@ -379,6 +425,7 @@ export class PaymentsService {
       const payments = paymentPayloads.map((createPaymentDto) =>
         queryRunner.manager.create(Payment, {
           ...createPaymentDto,
+          customerId: createPaymentDto.customerId ?? null,
           status: PaymentStatus.PENDING,
           expiresAt: new Date(
             Date.now() +
@@ -416,17 +463,87 @@ export class PaymentsService {
 
   async findAll(
     getPaymentsDto: GetPaymentsDto,
+    scope?: { customerId: string; merchantId: string },
   ): Promise<CursorPaginatedResult<Payment> | PaginatedResult<Payment>> {
     if (getPaymentsDto.cursor) {
-      return this.findWithCursor(getPaymentsDto);
+      return this.findWithCursor(getPaymentsDto, scope);
     }
-    return this.findWithOffset(getPaymentsDto);
+    return this.findWithOffset(getPaymentsDto, scope);
+  }
+
+  async findCustomerPayments(
+    customerId: string,
+    merchantId: string,
+    dto: GetPaymentsDto,
+  ): Promise<
+    (CursorPaginatedResult<Payment> | PaginatedResult<Payment>) & {
+      summary: Array<{
+        currency: string;
+        totalPaid: number;
+        totalRefunded: number;
+        paymentCount: number;
+        firstPaymentAt: Date | string | null;
+        lastPaymentAt: Date | string | null;
+      }>;
+    }
+  > {
+    const [result, summary] = await Promise.all([
+      this.findAll(dto, { customerId, merchantId }),
+      this.getCustomerPaymentSummary(customerId, merchantId),
+    ]);
+
+    return { ...result, summary };
+  }
+
+  private async getCustomerPaymentSummary(
+    customerId: string,
+    merchantId: string,
+  ): Promise<
+    Array<{
+      currency: string;
+      totalPaid: number;
+      totalRefunded: number;
+      paymentCount: number;
+      firstPaymentAt: Date | string | null;
+      lastPaymentAt: Date | string | null;
+    }>
+  > {
+    const rows = await this.paymentRepository
+      .createQueryBuilder('payment')
+      .select('payment.currency', 'currency')
+      .addSelect('COALESCE(SUM(payment.amount), 0)', 'totalPaid')
+      .addSelect('COALESCE(SUM(payment.refundedAmount), 0)', 'totalRefunded')
+      .addSelect('COUNT(payment.id)', 'paymentCount')
+      .addSelect('MIN(payment.createdAt)', 'firstPaymentAt')
+      .addSelect('MAX(payment.createdAt)', 'lastPaymentAt')
+      .where('payment.customerId = :customerId', { customerId })
+      .andWhere('payment.merchantId = :merchantId', { merchantId })
+      .andWhere('payment.status IN (:...summaryStatuses)', {
+        summaryStatuses: [
+          PaymentStatus.COMPLETED,
+          PaymentStatus.PARTIALLY_REFUNDED,
+          PaymentStatus.REFUNDED,
+        ],
+      })
+      .groupBy('payment.currency')
+      .orderBy('payment.currency', 'ASC')
+      .getRawMany();
+
+    return rows.map((row) => ({
+      currency: row.currency,
+      totalPaid: Number(row.totalPaid),
+      totalRefunded: Number(row.totalRefunded),
+      paymentCount: Number(row.paymentCount),
+      firstPaymentAt: row.firstPaymentAt ?? null,
+      lastPaymentAt: row.lastPaymentAt ?? null,
+    }));
   }
 
   private async findWithOffset(
     dto: GetPaymentsDto,
+    scope?: { customerId: string; merchantId: string },
   ): Promise<PaginatedResult<Payment>> {
-    const query = this.buildFilterQuery(dto);
+    const query = this.buildFilterQuery(dto, scope);
 
     const page = dto.page || 1;
     const limit = dto.limit || 20;
@@ -442,13 +559,14 @@ export class PaymentsService {
 
   private async findWithCursor(
     dto: GetPaymentsDto,
+    scope?: { customerId: string; merchantId: string },
   ): Promise<CursorPaginatedResult<Payment>> {
     const decoded = this.decodeCursor(dto.cursor!);
     const limit = dto.limit || 20;
     const order = dto.order || SortOrder.DESC;
     const sortBy = dto.sortBy || PaymentSortBy.CREATED_AT;
 
-    const query = this.buildFilterQuery(dto);
+    const query = this.buildFilterQuery(dto, scope);
 
     this.applyCursorCondition(query, sortBy, order, decoded);
 
@@ -470,8 +588,20 @@ export class PaymentsService {
     return { data: payments, nextCursor, hasMore };
   }
 
-  private buildFilterQuery(dto: GetPaymentsDto): SelectQueryBuilder<Payment> {
+  private buildFilterQuery(
+    dto: GetPaymentsDto,
+    scope?: { customerId: string; merchantId: string },
+  ): SelectQueryBuilder<Payment> {
     const query = this.paymentRepository.createQueryBuilder('payment');
+
+    if (scope) {
+      query.andWhere('payment.customerId = :customerId', {
+        customerId: scope.customerId,
+      });
+      query.andWhere('payment.merchantId = :merchantId', {
+        merchantId: scope.merchantId,
+      });
+    }
 
     if (dto.status) {
       query.andWhere('payment.status = :status', { status: dto.status });
@@ -646,11 +776,178 @@ export class PaymentsService {
     return payment;
   }
 
+  async update(
+    id: string,
+    dto: UpdatePaymentDto,
+    actorId: string,
+    ipAddress?: string,
+    userAgent?: string,
+  ): Promise<Payment> {
+    const immutableFields = [
+      'amount',
+      'currency',
+      'status',
+      'merchant',
+      'merchantId',
+      'refundedAmount',
+      'feeAmount',
+      'netAmount',
+      'settlementId',
+      'customerId',
+    ] as const;
+    const attemptedImmutableFields = immutableFields.filter(
+      (field) => dto[field] !== undefined,
+    );
+    if (attemptedImmutableFields.length > 0) {
+      throw new BadRequestException(
+        `Payment fields cannot be updated: ${attemptedImmutableFields.join(', ')}`,
+      );
+    }
+
+    const editableFields = [
+      'description',
+      'metadata',
+      'externalReference',
+    ] as const;
+    if (editableFields.every((field) => dto[field] === undefined)) {
+      throw new BadRequestException(
+        'At least one of description, metadata, or externalReference must be provided',
+      );
+    }
+
+    const queryRunner = this.dataSource.createQueryRunner();
+    try {
+      await queryRunner.connect();
+      await queryRunner.startTransaction();
+
+      const payment = await queryRunner.manager.findOneBy(Payment, {
+        id,
+        merchantId: actorId,
+      });
+      if (!payment) {
+        throw new NotFoundException(`Payment with ID ${id} not found`);
+      }
+
+      const before = {
+        description: payment.description,
+        metadata: payment.metadata ? { ...payment.metadata } : null,
+        externalReference: payment.externalReference,
+      };
+      const after = {
+        description:
+          dto.description === undefined ? before.description : dto.description,
+        metadata:
+          dto.metadata === undefined
+            ? before.metadata
+            : dto.metadata
+              ? { ...dto.metadata }
+              : null,
+        externalReference:
+          dto.externalReference === undefined
+            ? before.externalReference
+            : dto.externalReference,
+      };
+      const changedFields = editableFields.filter(
+        (field) => !isDeepStrictEqual(before[field], after[field]),
+      );
+
+      if (changedFields.length === 0) {
+        await queryRunner.commitTransaction();
+        return payment;
+      }
+
+      payment.description = after.description;
+      payment.metadata = after.metadata;
+      payment.externalReference = after.externalReference;
+      const updatedPayment = await queryRunner.manager.save(payment);
+
+      const auditLog = queryRunner.manager.create(AuditLog, {
+        actorId,
+        actorType: 'user',
+        action: 'payment.updated',
+        resourceType: 'payment',
+        resourceId: id,
+        ipAddress: ipAddress ?? null,
+        userAgent: userAgent ?? null,
+        metadata: { before, after, changedFields },
+      });
+      await queryRunner.manager.save(auditLog);
+
+      await queryRunner.commitTransaction();
+      this.logger.info(
+        { paymentId: id, changedFields },
+        'Payment updated successfully',
+      );
+
+      this.paymentSseService.emit(updatedPayment);
+      await this.webhooksService
+        .dispatchEventToMerchant(actorId, 'payment.updated', {
+          paymentId: updatedPayment.id,
+          before,
+          after,
+          changedFields,
+        })
+        .catch((error: unknown) =>
+          this.logger.error(
+            { paymentId: id, error },
+            'Failed to dispatch payment.updated webhook',
+          ),
+        );
+
+      return updatedPayment;
+    } catch (error) {
+      await queryRunner.rollbackTransaction();
+      this.logger.error(
+        `Payment update failed and rolled back: ${
+          error instanceof Error ? error.message : 'Unknown error'
+        }`,
+      );
+      throw error;
+    } finally {
+      await queryRunner.release();
+    }
+  }
+
   async getRefunds(paymentId: string): Promise<Refund[]> {
     return await this.refundRepository.find({
       where: { paymentId },
       order: { createdAt: 'DESC' },
     });
+  }
+
+  async getRefundReport(from?: string, to?: string) {
+    const query = this.refundRepository
+      .createQueryBuilder('refund')
+      .innerJoin(Payment, 'payment', 'payment.id = refund."paymentId"')
+      .select('refund."reasonCode"', 'reasonCode')
+      .addSelect('payment.currency', 'currency')
+      .addSelect('COUNT(refund.id)', 'count')
+      .addSelect('COALESCE(SUM(refund.amount), 0)', 'amount')
+      .groupBy('refund."reasonCode"')
+      .addGroupBy('payment.currency')
+      .orderBy('refund."reasonCode"', 'ASC')
+      .addOrderBy('payment.currency', 'ASC');
+
+    if (from) {
+      query.andWhere('refund."createdAt" >= :from', { from });
+    }
+    if (to) {
+      query.andWhere('refund."createdAt" <= :to', { to });
+    }
+
+    const rows = await query.getRawMany<{
+      reasonCode: RefundReasonCode;
+      currency: string;
+      count: string;
+      amount: string;
+    }>();
+
+    return rows.map((row) => ({
+      reasonCode: row.reasonCode,
+      currency: row.currency,
+      count: Number(row.count),
+      amount: Number(Number(row.amount).toFixed(2)),
+    }));
   }
 
   /**
@@ -674,12 +971,45 @@ export class PaymentsService {
       },
     });
 
-    // Status changes reflect via updatedAt
-    if (payment.updatedAt && payment.updatedAt > payment.createdAt) {
+    // Status changes reflect via updatedAt. A non-status field update also
+    // changes updatedAt, so PENDING alone must not imply a status transition.
+    if (
+      payment.updatedAt &&
+      payment.updatedAt > payment.createdAt &&
+      payment.status !== PaymentStatus.PENDING
+    ) {
       events.push({
         type: 'payment.status_updated',
         timestamp: payment.updatedAt,
         data: { status: payment.status },
+      });
+    }
+
+    // Mutable-field updates are persisted as audit records and projected into
+    // the payment timeline with their before/after snapshots.
+    const auditLogRepository = this.dataSource.getRepository(AuditLog);
+    const updateAuditLogs = await auditLogRepository.find({
+      where: {
+        action: 'payment.updated',
+        resourceType: 'payment',
+        resourceId: paymentId,
+      },
+      order: { timestamp: 'ASC' },
+    });
+    for (const auditLog of updateAuditLogs) {
+      const metadata = auditLog.metadata as {
+        before?: Record<string, unknown>;
+        after?: Record<string, unknown>;
+        changedFields?: string[];
+      } | null;
+      events.push({
+        type: 'payment.updated',
+        timestamp: auditLog.timestamp,
+        data: {
+          before: metadata?.before ?? null,
+          after: metadata?.after ?? null,
+          changedFields: metadata?.changedFields ?? [],
+        },
       });
     }
 
@@ -772,6 +1102,8 @@ export class PaymentsService {
     initiatedBy?: string,
   ): Promise<{ payment: Payment; refund: Refund }> {
     const queryRunner = this.dataSource.createQueryRunner();
+    let attemptedRefund: Refund | null = null;
+    let refundPayment: Payment | null = null;
 
     try {
       await queryRunner.connect();
@@ -782,6 +1114,7 @@ export class PaymentsService {
       if (!payment) {
         throw new NotFoundException(`Payment with ID ${id} not found`);
       }
+      refundPayment = payment;
 
       if (payment.status === PaymentStatus.PENDING) {
         throw new ConflictException(
@@ -831,9 +1164,11 @@ export class PaymentsService {
       const refund = queryRunner.manager.create(Refund, {
         paymentId: id,
         amount: refundAmount,
+        reasonCode: refundDto.reasonCode,
         reason: refundDto.reason,
         initiatedBy: initiatedBy ?? null,
       });
+      attemptedRefund = refund;
 
       const savedRefund = await queryRunner.manager.save(refund);
 
@@ -879,10 +1214,19 @@ export class PaymentsService {
       this.paymentSseService.emit(updatedPayment);
 
       await this.sendRefundNotifications(updatedPayment, savedRefund);
+      await this.dispatchRefundWebhook(updatedPayment, savedRefund, 'refund.issued');
 
       return { payment: updatedPayment, refund: savedRefund };
     } catch (error) {
       await queryRunner.rollbackTransaction();
+      if (attemptedRefund && refundPayment?.merchantId) {
+        await this.dispatchRefundWebhook(
+          refundPayment,
+          attemptedRefund,
+          'refund.failed',
+          error,
+        );
+      }
       this.logger.error(`Refund failed and rolled back: ${error.message}`);
       throw error;
     } finally {
@@ -1358,5 +1702,157 @@ export class PaymentsService {
         )
         .catch(() => {});
     }
+  }
+
+  // ─── Sandbox simulation ────────────────────────────────────────────────────
+
+  /**
+   * Forces a payment into a terminal state for sandbox/testnet integration testing.
+   * Runs the exact same side-effect chain as a real status transition:
+   * SSE emit → email notifications → split processing → merchant webhooks.
+   *
+   * Only callable when STELLAR_NETWORK !== 'PUBLIC'.
+   */
+  async simulate(
+    paymentId: string,
+    outcome: import('./dto/simulate-payment.dto').SimulateOutcome,
+    partialAmount?: number,
+  ): Promise<Payment> {
+    const payment = await this.paymentRepository.findOneBy({ id: paymentId });
+    if (!payment) {
+      throw new NotFoundException(`Payment with ID ${paymentId} not found`);
+    }
+
+    const terminalStates: PaymentStatus[] = [
+      PaymentStatus.COMPLETED,
+      PaymentStatus.FAILED,
+      PaymentStatus.CANCELLED,
+      PaymentStatus.REFUNDED,
+      PaymentStatus.PARTIALLY_REFUNDED,
+      PaymentStatus.EXPIRED,
+      PaymentStatus.PARTIALLY_COMPLETED,
+    ];
+
+    if (terminalStates.includes(payment.status)) {
+      throw new ConflictException(
+        `Cannot simulate outcome on payment already in terminal state: ${payment.status}`,
+      );
+    }
+
+    // Stamp metadata so consumers can identify simulated transitions
+    payment.metadata = {
+      ...(payment.metadata ?? {}),
+      simulated: 'true',
+    };
+
+    const previousStatus = payment.status;
+
+    switch (outcome) {
+      case 'COMPLETED': {
+        payment.status = PaymentStatus.COMPLETED;
+        break;
+      }
+      case 'FAILED': {
+        payment.status = PaymentStatus.FAILED;
+        break;
+      }
+      case 'EXPIRED': {
+        payment.status = PaymentStatus.EXPIRED;
+        payment.expiredAt = new Date();
+        break;
+      }
+      case 'PARTIALLY_COMPLETED': {
+        payment.status = PaymentStatus.PARTIALLY_COMPLETED;
+        if (partialAmount !== undefined) {
+          payment.amount = partialAmount;
+          const fee = await this.calculateFee(
+            payment.merchantId ?? undefined,
+            partialAmount,
+          );
+          payment.feeAmount = fee.feeAmount;
+          payment.netAmount = fee.netAmount;
+        }
+        break;
+      }
+    }
+
+    const updated = await this.paymentRepository.save(payment);
+
+    this.logger.info(
+      { paymentId, outcome, previousStatus },
+      'Payment simulation applied',
+    );
+
+    // ── Side effects (same as real status transitions) ─────────────────────
+
+    this.paymentSseService.emit(updated);
+
+    if (
+      updated.status === PaymentStatus.COMPLETED ||
+      updated.status === PaymentStatus.PARTIALLY_COMPLETED
+    ) {
+      await this.sendPaymentConfirmedNotifications(updated);
+      await this.processSplitsForPayment(updated);
+    }
+
+    if (
+      updated.status === PaymentStatus.COMPLETED &&
+      previousStatus !== PaymentStatus.COMPLETED &&
+      updated.paymentLinkId
+    ) {
+      await this.paymentLinksService.incrementCompletions(updated.paymentLinkId);
+    }
+
+    const webhookEvent =
+      updated.status === PaymentStatus.COMPLETED
+        ? 'payment.completed'
+        : updated.status === PaymentStatus.FAILED
+          ? 'payment.failed'
+          : updated.status === PaymentStatus.EXPIRED
+            ? 'payment.expired'
+            : 'payment.partially_completed';
+
+    if (updated.merchantId) {
+      await this.webhooksService
+        .dispatchEventToMerchant(updated.merchantId, webhookEvent, {
+          paymentId: updated.id,
+          amount: updated.amount,
+          currency: updated.currency,
+          status: updated.status,
+          simulated: true,
+          ...(updated.expiredAt && { expiredAt: updated.expiredAt }),
+        })
+        .catch((e) =>
+          this.logger.error(
+            { paymentId, event: webhookEvent },
+            `Failed to dispatch ${webhookEvent} webhook after simulation: ${e?.message}`,
+          ),
+        );
+    }
+
+    return updated;
+  }
+
+  private async dispatchRefundWebhook(
+    payment: Payment,
+    refund: Refund,
+    event: 'refund.issued' | 'refund.failed',
+    error?: unknown,
+  ): Promise<void> {
+    if (!payment.merchantId) return;
+
+    await this.webhooksService
+      .dispatchEventToMerchant(payment.merchantId, event, {
+        payment,
+        refund,
+        status: event === 'refund.issued' ? 'issued' : 'failed',
+        failureReason: error instanceof Error ? error.message : undefined,
+        timestamp: new Date().toISOString(),
+      })
+      .catch((webhookError) => {
+        this.logger.error(
+          `Failed to dispatch ${event} webhook: ${webhookError instanceof Error ? webhookError.message : 'Unknown error'}`,
+        );
+      });
   }
 }

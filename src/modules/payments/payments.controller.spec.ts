@@ -5,10 +5,10 @@ import { PaymentStatus } from './payment.entity';
 
 describe('PaymentsController', () => {
   let controller: PaymentsController;
-  let paymentsService: { createBulk: jest.Mock };
+  let paymentsService: { createBulk: jest.Mock; update: jest.Mock };
 
   beforeEach(() => {
-    paymentsService = { createBulk: jest.fn() };
+    paymentsService = { createBulk: jest.fn(), update: jest.fn() };
     controller = new PaymentsController(
       paymentsService as any,
       undefined as any,
@@ -68,6 +68,30 @@ describe('PaymentsController', () => {
       const invalidBody = [{ amount: -10.0, currency: 'USD' }];
       await expect(controller.createBulk(invalidBody as any)).rejects.toThrow(
         BadRequestException,
+      );
+    });
+  });
+
+  describe('update', () => {
+    it('passes authenticated ownership and request context to the service', async () => {
+      const dto = { description: 'Updated description' };
+      const user = { id: 'merchant-1' } as any;
+      const req = {
+        ip: '203.0.113.10',
+        headers: { 'user-agent': 'jest' },
+      } as any;
+      const updatedPayment = { id: 'payment-1' };
+      paymentsService.update.mockResolvedValue(updatedPayment);
+
+      await expect(
+        controller.update('payment-1', dto, user, req),
+      ).resolves.toBe(updatedPayment);
+      expect(paymentsService.update).toHaveBeenCalledWith(
+        'payment-1',
+        dto,
+        'merchant-1',
+        '203.0.113.10',
+        'jest',
       );
     });
   });

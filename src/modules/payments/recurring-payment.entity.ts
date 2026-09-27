@@ -14,6 +14,7 @@ export enum RecurringPaymentInterval {
 
 export enum RecurringPaymentStatus {
   ACTIVE = 'active',
+  TRIALING = 'trialing',
   PAUSED = 'paused',
   CANCELLED = 'cancelled',
 }
@@ -45,6 +46,9 @@ export class RecurringPayment {
   @Column({ nullable: true })
   merchantId: string | null;
 
+  @Column({ type: 'uuid', nullable: true })
+  customerId: string | null;
+
   @Column({ nullable: true })
   merchantEmail: string | null;
 
@@ -63,6 +67,15 @@ export class RecurringPayment {
   @Column({ type: 'timestamp' })
   nextRunAt: Date;
 
+  @Column({ type: 'int', default: 0 })
+  trialDays: number;
+
+  @Column({ type: 'timestamp', nullable: true })
+  trialEndsAt: Date | null;
+
+  @Column({ type: 'timestamp', nullable: true })
+  trialEndingNotifiedAt: Date | null;
+
   @Column({ type: 'timestamp', nullable: true })
   lastRunAt: Date | null;
 
@@ -77,6 +90,12 @@ export class RecurringPayment {
 
   @Column({ type: 'int', default: 0 })
   consecutiveFailures: number;
+
+  @Column({ type: 'int', default: 3 })
+  notifyDaysBefore: number;
+
+  @Column({ type: 'int', nullable: true })
+  lastNotifiedCycle: number | null;
 
   @Column({ type: 'timestamp', nullable: true })
   cancelledAt: Date | null;
