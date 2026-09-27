@@ -263,16 +263,34 @@ export class PaymentsService {
       await queryRunner.connect();
       await queryRunner.startTransaction();
 
+      let merchantId = createPaymentDto.merchantId;
+      if (createPaymentDto.customerId) {
+        const expectedMerchantId =
+          authenticatedMerchantId ?? createPaymentDto.merchantId;
+        if (!expectedMerchantId) {
+          throw new BadRequestException(
+            'A merchant is required when customerId is provided',
+          );
+        }
+        const customer = await resolveCustomerForMerchant(
+          this.paymentRepository.manager.getRepository(Customer),
+          createPaymentDto.customerId,
+          expectedMerchantId,
+          createPaymentDto.merchantId,
+        );
+        merchantId = customer.merchantId;
+      }
+
       this.logger.debug(
         `Starting payment creation transaction for amount: ${createPaymentDto.amount}`,
       );
 
       // Validate merchantId if provided
-      await this.validateMerchantId(createPaymentDto.merchantId);
+      await this.validateMerchantId(merchantId);
 
-      await this.ensurePaymentLimits(createPaymentDto);
+      await this.ensurePaymentLimits({ ...createPaymentDto, merchantId });
       const fee = await this.calculateFee(
-        createPaymentDto.merchantId,
+        merchantId,
         Number(createPaymentDto.amount),
       );
       const expiresInSeconds =
@@ -328,6 +346,7 @@ export class PaymentsService {
 
   async createBulk(
     createPaymentDtos: CreatePaymentDto[],
+    authenticatedMerchantId?: string,
   ): Promise<{ created: number; payments: Payment[] }> {
     const queryRunner = this.dataSource.createQueryRunner();
 
@@ -335,16 +354,42 @@ export class PaymentsService {
       await queryRunner.connect();
       await queryRunner.startTransaction();
 
+      const resolvedPaymentDtos = await Promise.all(
+        createPaymentDtos.map(async (createPaymentDto) => {
+          if (!createPaymentDto.customerId) return createPaymentDto;
+
+          const expectedMerchantId =
+            authenticatedMerchantId ?? createPaymentDto.merchantId;
+          if (!expectedMerchantId) {
+            throw new BadRequestException(
+              'A merchant is required when customerId is provided',
+            );
+          }
+
+          const customer = await resolveCustomerForMerchant(
+            this.paymentRepository.manager.getRepository(Customer),
+            createPaymentDto.customerId,
+            expectedMerchantId,
+            createPaymentDto.merchantId,
+          );
+
+          return {
+            ...createPaymentDto,
+            merchantId: customer.merchantId,
+          };
+        }),
+      );
+
       this.logger.debug(
         `Starting bulk payment creation transaction for ${
-          createPaymentDtos.length
+          resolvedPaymentDtos.length
         } items.`,
       );
 
       // Validate all merchantIds upfront
       const uniqueMerchantIds = [
         ...new Set(
-          createPaymentDtos
+          resolvedPaymentDtos
             .map((dto) => dto.merchantId)
             .filter((id): id is string => id !== undefined),
         ),
@@ -355,7 +400,7 @@ export class PaymentsService {
       }
 
       const paymentPayloads = await Promise.all(
-        createPaymentDtos.map(async (createPaymentDto) => {
+        resolvedPaymentDtos.map(async (createPaymentDto) => {
           await this.ensurePaymentLimits(createPaymentDto);
           const fee = await this.calculateFee(
             createPaymentDto.merchantId,
@@ -379,6 +424,7 @@ export class PaymentsService {
       const payments = paymentPayloads.map((createPaymentDto) =>
         queryRunner.manager.create(Payment, {
           ...createPaymentDto,
+          customerId: createPaymentDto.customerId ?? null,
           status: PaymentStatus.PENDING,
           expiresAt: new Date(
             Date.now() +

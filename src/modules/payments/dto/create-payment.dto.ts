@@ -10,6 +10,7 @@ import {
   IsPositive,
   IsObject,
   IsInt,
+  IsUUID,
   IsArray,
   IsBoolean,
   IsDateString,
@@ -195,6 +196,15 @@ export class CreatePaymentDto {
     example: 'payer@example.com',
   })
   payerEmail?: string;
+
+  @IsUUID('4', { message: 'customerId must be a valid UUID' })
+  @IsOptional()
+  @ApiPropertyOptional({
+    description:
+      'ID of a customer owned by the authenticated merchant. When provided, the payment merchant is set to the customer owner.',
+    example: '550e8400-e29b-41d4-a716-446655440000',
+  })
+  customerId?: string;
 
   @IsObject()
   @IsMetadata()

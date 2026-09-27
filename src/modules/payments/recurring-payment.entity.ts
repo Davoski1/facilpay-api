@@ -46,6 +46,9 @@ export class RecurringPayment {
   @Column({ nullable: true })
   merchantId: string | null;
 
+  @Column({ type: 'uuid', nullable: true })
+  customerId: string | null;
+
   @Column({ nullable: true })
   merchantEmail: string | null;
 

@@ -71,6 +71,8 @@ import { UpsertMerchantFeeConfigDto } from './dto/upsert-merchant-fee-config.dto
 import { RolesGuard } from '../auth/roles.guard';
 import { Roles } from '../auth/decorators/roles.decorator';
 import { UserRole } from '../../common/constants/roles';
+import { CurrentUser } from '../auth/decorators/current-user.decorator';
+import { User } from '../users/user.entity';
 
 @ApiTags('payments')
 @Controller('v1/payments')
@@ -182,7 +184,10 @@ export class PaymentsController {
       extractClientIp(req, this.trustedProxies),
       testModeHeader === 'true',
     );
-    return this.paymentsService.create(createPaymentDto);
+    return this.paymentsService.create(
+      createPaymentDto,
+      req.user?.id?.toString(),
+    );
   }
 
   @BulkThrottle()
@@ -220,7 +225,10 @@ export class PaymentsController {
       },
     },
   })
-  async createBulk(@Body() createPaymentDtos: CreatePaymentDto[]) {
+  async createBulk(
+    @Body() createPaymentDtos: CreatePaymentDto[],
+    @CurrentUser() user?: User,
+  ) {
     if (!Array.isArray(createPaymentDtos)) {
       throw new BadRequestException(
         'Request body must be an array of payment objects.',
@@ -248,7 +256,10 @@ export class PaymentsController {
       throw new BadRequestException(errors);
     }
 
-    return this.paymentsService.createBulk(paymentInstances);
+    return this.paymentsService.createBulk(
+      paymentInstances,
+      user?.id,
+    );
   }
 
   @Get('export')

@@ -71,7 +71,8 @@ export class RecurringPaymentsService {
       currency: dto.currency,
       interval: dto.interval,
       description: dto.description ?? null,
-      merchantId: dto.merchantId ?? null,
+      merchantId,
+      customerId,
       merchantEmail: dto.merchantEmail ?? null,
       payerEmail: dto.payerEmail ?? null,
       callbackUrl: dto.callbackUrl ?? null,
@@ -261,11 +262,12 @@ export class RecurringPaymentsService {
 
       let paymentId: string;
       if (!existing) {
-        const payment = await this.paymentsService.create({
+        const paymentDto = {
           amount: plan.amount,
           currency: plan.currency,
           description: plan.description ?? undefined,
           merchantId: plan.merchantId ?? undefined,
+          customerId: plan.customerId ?? undefined,
           merchantEmail: plan.merchantEmail ?? undefined,
           payerEmail: plan.payerEmail ?? undefined,
           callbackUrl: plan.callbackUrl ?? undefined,
