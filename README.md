@@ -186,3 +186,7 @@ Environment variables:
 │   └── health/
 
 ```
+
+## 📚 Documentation
+
+- [Environment](docs/ENVIRONMENT.md) — configuration variables reference
