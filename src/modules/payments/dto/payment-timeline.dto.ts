@@ -11,6 +11,7 @@ export class PaymentTimelineEvent {
     example: 'payment.created',
     enum: [
       'payment.created',
+      'payment.updated',
       'payment.status_updated',
       'payment.cancelled',
       'payment.expired',

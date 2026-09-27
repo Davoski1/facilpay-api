@@ -10,6 +10,7 @@ import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 
 export const WEBHOOK_EVENT_TYPES = [
   'payment.created',
+  'payment.updated',
   'payment.completed',
   'payment.failed',
   'payment.expired',

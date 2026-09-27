@@ -11,6 +11,7 @@ All webhook management endpoints live under `/v1/webhooks` and require a valid J
 | Event                    | Fired when                                   |
 | ------------------------ | -------------------------------------------- |
 | `payment.created`        | A new payment is initiated                   |
+| `payment.updated`        | Mutable payment details are updated          |
 | `payment.completed`      | A payment settles successfully               |
 | `payment.failed`         | A payment attempt fails                      |
 | `payment.expired`        | A payment expires without completion         |

@@ -775,6 +775,138 @@ export class PaymentsService {
     return payment;
   }
 
+  async update(
+    id: string,
+    dto: UpdatePaymentDto,
+    actorId: string,
+    ipAddress?: string,
+    userAgent?: string,
+  ): Promise<Payment> {
+    const immutableFields = [
+      'amount',
+      'currency',
+      'status',
+      'merchant',
+      'merchantId',
+      'refundedAmount',
+      'feeAmount',
+      'netAmount',
+      'settlementId',
+      'customerId',
+    ] as const;
+    const attemptedImmutableFields = immutableFields.filter(
+      (field) => dto[field] !== undefined,
+    );
+    if (attemptedImmutableFields.length > 0) {
+      throw new BadRequestException(
+        `Payment fields cannot be updated: ${attemptedImmutableFields.join(', ')}`,
+      );
+    }
+
+    const editableFields = [
+      'description',
+      'metadata',
+      'externalReference',
+    ] as const;
+    if (editableFields.every((field) => dto[field] === undefined)) {
+      throw new BadRequestException(
+        'At least one of description, metadata, or externalReference must be provided',
+      );
+    }
+
+    const queryRunner = this.dataSource.createQueryRunner();
+    try {
+      await queryRunner.connect();
+      await queryRunner.startTransaction();
+
+      const payment = await queryRunner.manager.findOneBy(Payment, {
+        id,
+        merchantId: actorId,
+      });
+      if (!payment) {
+        throw new NotFoundException(`Payment with ID ${id} not found`);
+      }
+
+      const before = {
+        description: payment.description,
+        metadata: payment.metadata ? { ...payment.metadata } : null,
+        externalReference: payment.externalReference,
+      };
+      const after = {
+        description:
+          dto.description === undefined ? before.description : dto.description,
+        metadata:
+          dto.metadata === undefined
+            ? before.metadata
+            : dto.metadata
+              ? { ...dto.metadata }
+              : null,
+        externalReference:
+          dto.externalReference === undefined
+            ? before.externalReference
+            : dto.externalReference,
+      };
+      const changedFields = editableFields.filter(
+        (field) => !isDeepStrictEqual(before[field], after[field]),
+      );
+
+      if (changedFields.length === 0) {
+        await queryRunner.commitTransaction();
+        return payment;
+      }
+
+      payment.description = after.description;
+      payment.metadata = after.metadata;
+      payment.externalReference = after.externalReference;
+      const updatedPayment = await queryRunner.manager.save(payment);
+
+      const auditLog = queryRunner.manager.create(AuditLog, {
+        actorId,
+        actorType: 'user',
+        action: 'payment.updated',
+        resourceType: 'payment',
+        resourceId: id,
+        ipAddress: ipAddress ?? null,
+        userAgent: userAgent ?? null,
+        metadata: { before, after, changedFields },
+      });
+      await queryRunner.manager.save(auditLog);
+
+      await queryRunner.commitTransaction();
+      this.logger.info(
+        { paymentId: id, changedFields },
+        'Payment updated successfully',
+      );
+
+      this.paymentSseService.emit(updatedPayment);
+      await this.webhooksService
+        .dispatchEventToMerchant(actorId, 'payment.updated', {
+          paymentId: updatedPayment.id,
+          before,
+          after,
+          changedFields,
+        })
+        .catch((error: unknown) =>
+          this.logger.error(
+            { paymentId: id, error },
+            'Failed to dispatch payment.updated webhook',
+          ),
+        );
+
+      return updatedPayment;
+    } catch (error) {
+      await queryRunner.rollbackTransaction();
+      this.logger.error(
+        `Payment update failed and rolled back: ${
+          error instanceof Error ? error.message : 'Unknown error'
+        }`,
+      );
+      throw error;
+    } finally {
+      await queryRunner.release();
+    }
+  }
+
   async getRefunds(paymentId: string): Promise<Refund[]> {
     return await this.refundRepository.find({
       where: { paymentId },
@@ -838,12 +970,45 @@ export class PaymentsService {
       },
     });
 
-    // Status changes reflect via updatedAt
-    if (payment.updatedAt && payment.updatedAt > payment.createdAt) {
+    // Status changes reflect via updatedAt. A non-status field update also
+    // changes updatedAt, so PENDING alone must not imply a status transition.
+    if (
+      payment.updatedAt &&
+      payment.updatedAt > payment.createdAt &&
+      payment.status !== PaymentStatus.PENDING
+    ) {
       events.push({
         type: 'payment.status_updated',
         timestamp: payment.updatedAt,
         data: { status: payment.status },
+      });
+    }
+
+    // Mutable-field updates are persisted as audit records and projected into
+    // the payment timeline with their before/after snapshots.
+    const auditLogRepository = this.dataSource.getRepository(AuditLog);
+    const updateAuditLogs = await auditLogRepository.find({
+      where: {
+        action: 'payment.updated',
+        resourceType: 'payment',
+        resourceId: paymentId,
+      },
+      order: { timestamp: 'ASC' },
+    });
+    for (const auditLog of updateAuditLogs) {
+      const metadata = auditLog.metadata as {
+        before?: Record<string, unknown>;
+        after?: Record<string, unknown>;
+        changedFields?: string[];
+      } | null;
+      events.push({
+        type: 'payment.updated',
+        timestamp: auditLog.timestamp,
+        data: {
+          before: metadata?.before ?? null,
+          after: metadata?.after ?? null,
+          changedFields: metadata?.changedFields ?? [],
+        },
       });
     }
 
