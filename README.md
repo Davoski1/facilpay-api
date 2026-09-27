@@ -186,3 +186,7 @@ Environment variables:
 │   └── health/
 
 ```
+
+## 📚 Documentation
+
+- [Contributing](CONTRIBUTING.md) — setup, conventions, PR checklist
