@@ -43,11 +43,24 @@ export class StellarService {
   }
 
   async sendPayment(destination: string, amount: string, memo?: string, merchantId?: string) {
+    return this.submitPaymentWithRetry(destination, amount, memo, merchantId, 0);
+  }
+
+  private async submitPaymentWithRetry(
+    destination: string,
+    amount: string,
+    memo: string | undefined,
+    merchantId: string | undefined,
+    attemptNumber: number,
+  ) {
     try {
       const sourceAccount = await this.server.loadAccount(this.sourceKeypair.publicKey());
 
+      const baseFee = this.configService.get<string>('STELLAR_BASE_FEE', '100');
+      const fee = String(parseInt(baseFee) * (attemptNumber + 1));
+
       let transactionBuilder = new StellarSdk.TransactionBuilder(sourceAccount, {
-        fee: this.configService.get<string>('STELLAR_BASE_FEE', '100'),
+        fee,
         networkPassphrase: this.networkPassphrase,
       })
         .addOperation(
@@ -75,7 +88,7 @@ export class StellarService {
 
       if (requiresMultiSig) {
         this.logger.log(`Transaction requires multi-sig. Threshold: ${medThreshold}, current weight: ${myWeight}`);
-        
+
         const multiSigTx = this.multiSigRepo.create({
           xdr: transaction.toXDR(),
           sourceAccount: sourceAccount.id,
@@ -84,18 +97,17 @@ export class StellarService {
           signers: [this.sourceKeypair.publicKey()],
           status: MultiSigTransactionStatus.PENDING_SIGNATURES,
         });
-        
+
         await this.multiSigRepo.save(multiSigTx);
-        
+
         if (merchantId) {
-          // Notify relevant signers via webhook
           await this.webhooksService.dispatchEventToMerchant(
-            merchantId, 
-            'transaction.multisig_required', 
+            merchantId,
+            'transaction.multisig_required',
             { transactionId: multiSigTx.id, requiredSignatures: medThreshold, collectedSignatures: myWeight }
           ).catch(e => this.logger.error('Failed to dispatch webhook', e));
         }
-        
+
         return {
           status: 'pending_signatures',
           multiSigTransactionId: multiSigTx.id,
@@ -105,14 +117,60 @@ export class StellarService {
       }
 
       const response = await this.server.submitTransaction(transaction);
-      
+
       this.logger.log(`Payment successful: ${response.hash}`);
       return {
         hash: response.hash,
         ledger: response.ledger,
       };
 
+    } catch (error: any) {
+      const resultCodes = error.response?.data?.extras?.result_codes;
+      const isInsufficientFee = resultCodes?.transaction === 'tx_insufficient_fee';
+      const canRetry = attemptNumber < 3;
+
+      if ((isInsufficientFee || this.isTimeoutError(error)) && canRetry) {
+        this.logger.warn(
+          { attemptNumber: attemptNumber + 1, destination, error: error.message },
+          'Transaction failed with insufficient fee or timeout, retrying with higher fee',
+        );
+        return this.submitPaymentWithRetry(destination, amount, memo, merchantId, attemptNumber + 1);
+      }
+
+      this.handleStellarError(error);
+    }
+  }
+
+  private isTimeoutError(error: any): boolean {
+    const message = error.message?.toLowerCase() || '';
+    return message.includes('timeout') || message.includes('deadline exceeded');
+  }
+
+  async submitFeeBumpTransaction(innerTransactionXdr: string, feeBump: number): Promise<any> {
+    const maxFee = this.configService.get<number>('STELLAR_MAX_FEE', 1000);
+    if (feeBump > maxFee) {
+      throw new BadRequestException(`Fee bump exceeds maximum fee of ${maxFee} stroops`);
+    }
+
+    try {
+      const innerTx = new StellarSdk.Transaction(innerTransactionXdr, this.networkPassphrase);
+      const feeBumpTx = StellarSdk.TransactionBuilder.buildFeeBumpTransaction(
+        this.sourceKeypair,
+        feeBump.toString(),
+        innerTx,
+        this.networkPassphrase,
+      );
+
+      feeBumpTx.sign(this.sourceKeypair);
+      const response = await this.server.submitTransaction(feeBumpTx);
+
+      this.logger.log(`Fee-bump transaction submitted: ${response.hash}`);
+      return {
+        hash: response.hash,
+        ledger: response.ledger,
+      };
     } catch (error) {
+      this.logger.error('Failed to submit fee-bump transaction', error);
       this.handleStellarError(error);
     }
   }
