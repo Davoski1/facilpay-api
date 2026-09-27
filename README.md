@@ -186,3 +186,7 @@ Environment variables:
 │   └── health/
 
 ```
+
+## 📚 Documentation
+
+- [Errors](docs/ERRORS.md) — error response format and common status codes
