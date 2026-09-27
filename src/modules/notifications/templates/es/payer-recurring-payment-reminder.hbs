@@ -1,0 +1,37 @@
+<h2>Recordatorio de próximo pago</h2>
+
+<p>Hola,</p>
+
+<p>Te recordamos que tu pago recurrente se procesará pronto.</p>
+
+<table>
+  <tr>
+    <td><strong>Importe:</strong></td>
+    <td>{{formattedAmount}}</td>
+  </tr>
+  <tr>
+    <td><strong>Fecha:</strong></td>
+    <td>{{chargeDate}}</td>
+  </tr>
+  <tr>
+    <td><strong>Comercio:</strong></td>
+    <td>{{merchantEmail}}</td>
+  </tr>
+  {{#if planDescription}}
+  <tr>
+    <td><strong>Descripción:</strong></td>
+    <td>{{planDescription}}</td>
+  </tr>
+  {{/if}}
+</table>
+
+<p>
+  <a href="{{manageUrl}}">Gestionar suscripción</a> |
+  <a href="{{cancelUrl}}">Cancelar suscripción</a>
+</p>
+
+<p>
+  Si no esperabas este cargo o deseas cancelarlo, utiliza los enlaces de arriba.
+</p>
+
+<p>&copy; {{year}} FacilPay. Todos los derechos reservados.</p>

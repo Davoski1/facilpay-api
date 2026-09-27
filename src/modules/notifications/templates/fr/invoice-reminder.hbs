@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html>
+<html lang="fr">
 <head>
   <meta charset="utf-8">
   <style>
@@ -27,26 +27,26 @@
       {{#if merchantLogo}}
       <img src="{{merchantLogo}}" alt="{{merchantName}}" class="logo">
       {{/if}}
-      <h1>Invoice Reminder</h1>
+      <h1>Rappel de facture</h1>
     </div>
     <div class="body">
-      <p>Hello,</p>
+      <p>Bonjour,</p>
       <p>{{previewText}}</p>
-      <div class="amount">{{amount}} {{currency}}</div>
+      <div class="amount">{{formattedAmount}}</div>
       <dl class="details">
-        <dt>Invoice ID</dt>
+        <dt>N° de facture</dt>
         <dd>{{paymentId}}</dd>
-        <dt>Due Date</dt>
+        <dt>Date d'échéance</dt>
         <dd>{{dueDate}}</dd>
       </dl>
-      <p>If you have already paid, please disregard this reminder. Otherwise, please complete your payment at your earliest convenience.</p>
+      <p>Si vous avez déjà payé, veuillez ignorer ce rappel. Sinon, merci de régler votre paiement dès que possible.</p>
       {{#if supportUrl}}
-      <p>If you have questions, please contact <a href="{{supportUrl}}">{{merchantName}} support</a>.</p>
+      <p>Pour toute question, contactez <a href="{{supportUrl}}">l'assistance {{merchantName}}</a>.</p>
       {{/if}}
     </div>
     <div class="footer">
-      <p>&copy; {{year}} {{merchantName}}. All rights reserved.</p>
-      {{#if supportUrl}}<p><a href="{{supportUrl}}">Support</a>{{/if}} | <a href="{{unsubscribeUrl}}">Unsubscribe</a></p>
+      <p>&copy; {{year}} {{merchantName}}. Tous droits réservés.</p>
+      {{#if supportUrl}}<p><a href="{{supportUrl}}">Assistance</a>{{/if}} | <a href="{{unsubscribeUrl}}">Se désabonner</a></p>
     </div>
   </div>
 </body>

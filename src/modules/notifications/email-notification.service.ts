@@ -6,6 +6,8 @@ import { Logger } from 'pino';
 import { EmailEventType } from './email-log.entity';
 import { SendEmailJobData } from './email.processor';
 import type { ReportSummary } from '../reports/reports.service';
+import { formatDate, formatMoney } from './i18n/locale';
+import { translate } from './i18n/messages';
 
 @Injectable()
 export class EmailNotificationService {
@@ -108,15 +110,18 @@ export class EmailNotificationService {
     amount: string,
     currency: string,
     reason: string | null,
+    locale?: string | null,
   ): Promise<void> {
+    const formattedAmount = formatMoney(amount, currency, locale);
     await this.enqueue({
       to,
-      subject: `Dispute Opened: ${amount} ${currency}`,
+      subject: translate(locale, 'subject.disputeOpened', { amount: formattedAmount }),
       templateName: 'payer-dispute-opened',
       templateData: {
         payerName: payerName || undefined,
         paymentAmount: amount,
         paymentCurrency: currency,
+        formattedAmount,
         paymentId,
         disputeId,
         disputeReason: reason || undefined,
@@ -125,6 +130,7 @@ export class EmailNotificationService {
       recipientRole: 'payer',
       paymentId,
       includeUnsubscribe: true,
+      locale,
     });
   }
 
@@ -169,15 +175,17 @@ export class EmailNotificationService {
     previousStatus: string,
     newStatus: string,
     resolutionNotes: string | null,
+    locale?: string | null,
   ): Promise<void> {
     await this.enqueue({
       to,
-      subject: `Dispute Status Updated: ${newStatus}`,
+      subject: translate(locale, 'subject.disputeStatusChanged', { status: newStatus }),
       templateName: 'payer-dispute-status-changed',
       templateData: {
         payerName: payerName || undefined,
         paymentAmount: amount,
         paymentCurrency: currency,
+        formattedAmount: formatMoney(amount, currency, locale),
         paymentId,
         disputeId,
         previousStatus,
@@ -188,6 +196,7 @@ export class EmailNotificationService {
       recipientRole: 'payer',
       paymentId,
       includeUnsubscribe: true,
+      locale,
     });
   }
 
@@ -198,27 +207,27 @@ export class EmailNotificationService {
     amount: string,
     currency: string,
     description: string | null,
+    locale?: string | null,
   ): Promise<void> {
+    const formattedAmount = formatMoney(amount, currency, locale);
     await this.enqueue({
       to,
-      subject: `Payment Confirmed: ${amount} ${currency}`,
+      subject: translate(locale, 'subject.paymentConfirmed', { amount: formattedAmount }),
       templateName: 'payer-payment-confirmed',
       templateData: {
         payerName: payerName || undefined,
         paymentAmount: amount,
         paymentCurrency: currency,
+        formattedAmount,
         paymentId,
         paymentDescription: description || undefined,
-        date: new Date().toLocaleDateString('en-US', {
-          year: 'numeric',
-          month: 'long',
-          day: 'numeric',
-        }),
+        date: formatDate(new Date(), locale),
       },
       eventType: EmailEventType.PAYMENT_CONFIRMED,
       recipientRole: 'payer',
       paymentId,
       includeUnsubscribe: true,
+      locale,
     });
   }
 
@@ -230,10 +239,12 @@ export class EmailNotificationService {
     refundAmount: string,
     currency: string,
     reason: string | null,
+    locale?: string | null,
   ): Promise<void> {
+    const formattedRefundAmount = formatMoney(refundAmount, currency, locale);
     await this.enqueue({
       to,
-      subject: `Refund Processed: ${refundAmount} ${currency}`,
+      subject: translate(locale, 'subject.refundProcessed', { amount: formattedRefundAmount }),
       templateName: 'payer-refund-processed',
       templateData: {
         payerName: payerName || undefined,
@@ -242,6 +253,7 @@ export class EmailNotificationService {
         paymentId,
         refundId,
         refundAmount,
+        formattedRefundAmount,
         refundReason: reason || undefined,
       },
       eventType: EmailEventType.REFUND_PROCESSED,
@@ -249,6 +261,7 @@ export class EmailNotificationService {
       paymentId,
       refundId,
       includeUnsubscribe: true,
+      locale,
     });
   }
 
@@ -263,22 +276,28 @@ export class EmailNotificationService {
     manageUrl: string,
     cancelUrl: string,
     description: string | null,
+    locale?: string | null,
   ): Promise<void> {
-    const formattedDate = chargeDate.toLocaleDateString('en-US', {
+    const formattedDate = formatDate(chargeDate, locale, {
       weekday: 'long',
       year: 'numeric',
       month: 'long',
       day: 'numeric',
     });
+    const formattedAmount = formatMoney(amount, currency, locale);
 
     await this.enqueue({
       to,
-      subject: `Upcoming Charge: ${amount} ${currency} on ${formattedDate}`,
+      subject: translate(locale, 'subject.recurringReminder', {
+        amount: formattedAmount,
+        date: formattedDate,
+      }),
       templateName: 'payer-recurring-payment-reminder',
       templateData: {
         payerName: payerName || undefined,
         paymentAmount: amount,
         paymentCurrency: currency,
+        formattedAmount,
         chargeDate: formattedDate,
         merchantEmail,
         manageUrl,
@@ -289,6 +308,7 @@ export class EmailNotificationService {
       recipientRole: 'payer',
       paymentId: planId,
       includeUnsubscribe: true,
+      locale,
     });
   }
 
@@ -397,25 +417,21 @@ export class EmailNotificationService {
       dueDate: string;
       reminderType: 'BEFORE' | 'ON_DUE' | 'AFTER';
       daysUntilDue?: number;
+      locale?: string | null;
     },
   ): Promise<void> {
-    let subject: string;
-    let previewText: string;
-
-    switch (data.reminderType) {
-      case 'BEFORE':
-        subject = `Reminder: Invoice due in ${data.daysUntilDue} days`;
-        previewText = `Your invoice from ${branding.displayName} is due soon.`;
-        break;
-      case 'ON_DUE':
-        subject = 'Invoice due today';
-        previewText = `Your invoice from ${branding.displayName} is due today.`;
-        break;
-      case 'AFTER':
-        subject = 'Urgent: Invoice overdue';
-        previewText = `Your invoice from ${branding.displayName} is now overdue.`;
-        break;
-    }
+    const { locale } = data;
+    const suffix = { BEFORE: 'Before', ON_DUE: 'OnDue', AFTER: 'After' }[data.reminderType];
+    const subject = translate(locale, `subject.invoice${suffix}`, {
+      days: data.daysUntilDue ?? '',
+    });
+    const previewText = translate(locale, `preview.invoice${suffix}`, {
+      merchant: branding.displayName,
+    });
+    const parsedDueDate = new Date(data.dueDate);
+    const dueDate = Number.isNaN(parsedDueDate.getTime())
+      ? data.dueDate
+      : formatDate(parsedDueDate, locale);
 
     await this.enqueue({
       to,
@@ -430,13 +446,15 @@ export class EmailNotificationService {
         paymentId: data.paymentId,
         amount: data.amount,
         currency: data.currency,
-        dueDate: data.dueDate,
+        formattedAmount: formatMoney(data.amount, data.currency, locale),
+        dueDate,
         previewText,
       },
       eventType: EmailEventType.PAYMENT_RECEIVED, // Could add new type
       recipientRole: 'payer',
       paymentId: data.paymentId,
       includeUnsubscribe: true,
+      locale,
     });
   }
 
@@ -458,11 +476,14 @@ export class EmailNotificationService {
       amount: string;
       currency: string;
       description: string | null;
+      locale?: string | null;
     },
   ): Promise<void> {
+    const { locale } = data;
+    const formattedAmount = formatMoney(data.amount, data.currency, locale);
     await this.enqueue({
       to,
-      subject: `Payment Confirmed: ${data.amount} ${data.currency}`,
+      subject: translate(locale, 'subject.paymentConfirmed', { amount: formattedAmount }),
       templateName: 'payer-payment-confirmed',
       templateData: {
         merchantName: branding.displayName,
@@ -473,18 +494,16 @@ export class EmailNotificationService {
         payerName: data.payerName || undefined,
         paymentAmount: data.amount,
         paymentCurrency: data.currency,
+        formattedAmount,
         paymentId: data.paymentId,
         paymentDescription: data.description || undefined,
-        date: new Date().toLocaleDateString('en-US', {
-          year: 'numeric',
-          month: 'long',
-          day: 'numeric',
-        }),
+        date: formatDate(new Date(), locale),
       },
       eventType: EmailEventType.PAYMENT_CONFIRMED,
       recipientRole: 'payer',
       paymentId: data.paymentId,
       includeUnsubscribe: true,
+      locale,
     });
   }
 }

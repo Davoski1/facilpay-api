@@ -21,6 +21,10 @@ export class User {
   @Column({ nullable: true })
   name: string | null = null;
 
+  /** Preferred language for transactional emails (en, fr, es, pt). */
+  @Column({ type: 'varchar', length: 10, default: 'en' })
+  locale: string = 'en';
+
   @Column('text', { array: true, default: [UserRole.USER] })
   roles: UserRole[] = [UserRole.USER];
 

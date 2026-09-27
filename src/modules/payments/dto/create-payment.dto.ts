@@ -196,6 +196,16 @@ export class CreatePaymentDto {
   })
   payerEmail?: string;
 
+  @IsString()
+  @MaxLength(35)
+  @IsOptional()
+  @ApiPropertyOptional({
+    description:
+      'Preferred language for payer emails (e.g. "fr" or "pt-BR"). Defaults to the request Accept-Language header; unsupported languages fall back to English.',
+    example: 'fr',
+  })
+  payerLocale?: string;
+
   @IsObject()
   @IsMetadata()
   @IsOptional()

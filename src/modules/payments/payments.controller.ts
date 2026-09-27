@@ -21,6 +21,7 @@ import { Observable } from 'rxjs';
 import { SseJwtGuard } from '../auth/guards/sse-jwt.guard';
 import { PaymentSseService } from './payment-sse.service';
 import { MerchantsService } from '../merchants/merchants.service';
+import { resolveLocaleFromAcceptLanguage } from '../notifications/i18n/locale';
 
 import {
   ApiTags,
@@ -182,6 +183,10 @@ export class PaymentsController {
       extractClientIp(req, this.trustedProxies),
       testModeHeader === 'true',
     );
+    if (!createPaymentDto.payerLocale) {
+      createPaymentDto.payerLocale =
+        resolveLocaleFromAcceptLanguage(req.headers['accept-language']) ?? undefined;
+    }
     return this.paymentsService.create(createPaymentDto);
   }
 

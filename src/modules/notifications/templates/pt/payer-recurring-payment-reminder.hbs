@@ -1,0 +1,37 @@
+<h2>Lembrete de pagamento futuro</h2>
+
+<p>Olá,</p>
+
+<p>Este é um lembrete de que seu pagamento recorrente será processado em breve.</p>
+
+<table>
+  <tr>
+    <td><strong>Valor:</strong></td>
+    <td>{{formattedAmount}}</td>
+  </tr>
+  <tr>
+    <td><strong>Data:</strong></td>
+    <td>{{chargeDate}}</td>
+  </tr>
+  <tr>
+    <td><strong>Comerciante:</strong></td>
+    <td>{{merchantEmail}}</td>
+  </tr>
+  {{#if planDescription}}
+  <tr>
+    <td><strong>Descrição:</strong></td>
+    <td>{{planDescription}}</td>
+  </tr>
+  {{/if}}
+</table>
+
+<p>
+  <a href="{{manageUrl}}">Gerenciar assinatura</a> |
+  <a href="{{cancelUrl}}">Cancelar assinatura</a>
+</p>
+
+<p>
+  Se você não esperava esta cobrança ou deseja cancelar, use os links acima.
+</p>
+
+<p>&copy; {{year}} FacilPay. Todos os direitos reservados.</p>

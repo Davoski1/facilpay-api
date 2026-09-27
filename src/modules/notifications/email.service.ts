@@ -7,6 +7,8 @@ import { AppLogger } from '../logger/logger.service';
 import { Logger } from 'pino';
 import { EmailLog, EmailEventType, EmailLogStatus } from './email-log.entity';
 import { EmailSuppression } from './email-suppression.entity';
+import { normalizeLocale } from './i18n/locale';
+import { resolveTemplatePath } from './i18n/template-resolver';
 
 @Injectable()
 export class EmailService {
@@ -41,9 +43,12 @@ export class EmailService {
     paymentId?: string;
     refundId?: string;
     includeUnsubscribe?: boolean;
+    locale?: string | null;
   }): Promise<void> {
+    const locale = normalizeLocale(options.locale);
     const context: Record<string, any> = {
       ...options.templateData,
+      locale,
       appUrl: this.appUrl,
       year: new Date().getFullYear(),
     };
@@ -77,7 +82,7 @@ export class EmailService {
       const info = await this.mailerService.sendMail({
         to: options.to,
         subject: options.subject,
-        template: options.templateName,
+        template: resolveTemplatePath(options.templateName, locale),
         context,
       });
 
