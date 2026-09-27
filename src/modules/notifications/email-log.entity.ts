@@ -18,6 +18,10 @@ export enum EmailEventType {
 export enum EmailLogStatus {
   SENT = 'sent',
   FAILED = 'failed',
+  DELIVERED = 'delivered',
+  BOUNCED = 'bounced',
+  COMPLAINED = 'complained',
+  SUPPRESSED = 'suppressed',
 }
 
 @Entity('email_logs')
@@ -50,6 +54,14 @@ export class EmailLog {
 
   @Column({ nullable: true })
   refundId: string | null = null;
+
+  /** Message-ID assigned when the email was handed to the provider. */
+  @Index()
+  @Column({ type: 'varchar', length: 255, nullable: true })
+  providerMessageId: string | null = null;
+
+  @Column({ type: 'timestamp', nullable: true })
+  statusUpdatedAt: Date | null = null;
 
   @Index()
   @CreateDateColumn()

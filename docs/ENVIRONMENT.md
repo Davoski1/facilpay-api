@@ -75,6 +75,8 @@ whether it is required in production.
 | `SMTP_USER` | SMTP username | *(empty)* | Yes | `user` |
 | `SMTP_PASS` | SMTP password | *(empty)* | Yes | *(secret)* |
 | `SMTP_FROM` | From address for outgoing mail | `"FacilPay" <noreply@facilpay.com>` | No | `"FacilPay" <noreply@facilpay.com>` |
+| `EMAIL_WEBHOOK_SECRET` | HMAC secret for the generic `POST /v1/email/events` receiver | *(empty — generic receiver rejects all events)* | Yes, if using the generic receiver | *(secret)* |
+| `SENDGRID_WEBHOOK_PUBLIC_KEY` | SendGrid Event Webhook verification key (base64 DER) for `POST /v1/email/events/sendgrid` | *(empty — SendGrid receiver rejects all events)* | Yes, if using SendGrid | `MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE...` |
 
 ## CORS
 
