@@ -8,6 +8,7 @@ import {
 import { InjectRepository } from '@nestjs/typeorm';
 import {
   DataSource,
+  EntityManager,
   LessThanOrEqual,
   Repository,
   SelectQueryBuilder,
@@ -1199,6 +1200,12 @@ export class PaymentsService {
         );
       }
 
+      await this.appendRefund(
+        queryRunner.manager,
+        payment,
+        savedRefund.id,
+        refundAmount,
+      );
       await queryRunner.commitTransaction();
       this.logger.info(
         `Refund processed: ${savedRefund.id} for payment ${id}, amount: ${refundAmount}`,
@@ -1259,6 +1266,15 @@ export class PaymentsService {
       }
 
       const updatedPayment = await queryRunner.manager.save(payment);
+
+      if (previousStatus !== PaymentStatus.COMPLETED) {
+        if (updatedPayment.status === PaymentStatus.COMPLETED) {
+          await this.appendPaymentCompletion(
+            queryRunner.manager,
+            updatedPayment,
+          );
+        }
+      }
 
       await queryRunner.commitTransaction();
       this.logger.info(
@@ -1569,6 +1585,89 @@ export class PaymentsService {
         )
         .catch(() => {});
     }
+  }
+
+  private async appendPaymentCompletion(
+    manager: EntityManager,
+    payment: Payment,
+  ): Promise<void> {
+    if (!payment.merchantId) return;
+    const grossValue = Number(payment.amount);
+    if (!Number.isFinite(grossValue) || grossValue <= 0) return;
+    const gross = Number(grossValue.toFixed(2));
+    const availableValue = Number(payment.netAmount ?? gross);
+    const available = Number.isFinite(availableValue)
+      ? Number(availableValue.toFixed(2))
+      : gross;
+    const fee = gross - available;
+    const lines = [
+      {
+        merchantId: payment.merchantId,
+        currency: payment.currency,
+        account: LedgerAccount.PENDING,
+        amount: -gross,
+        referenceType: LedgerReferenceType.PAYMENT,
+        referenceId: payment.id,
+      },
+    ];
+
+    if (available !== 0) {
+      lines.push({
+        merchantId: payment.merchantId,
+        currency: payment.currency,
+        account: LedgerAccount.AVAILABLE,
+        amount: available,
+        referenceType: LedgerReferenceType.PAYMENT,
+        referenceId: payment.id,
+      });
+    }
+    if (fee !== 0) {
+      lines.push({
+        merchantId: payment.merchantId,
+        currency: payment.currency,
+        account: LedgerAccount.FEES,
+        amount: fee,
+        referenceType: LedgerReferenceType.FEE,
+        referenceId: payment.id,
+      });
+    }
+
+    await appendLedgerTransaction(manager, { lines });
+  }
+
+  private async appendRefund(
+    manager: EntityManager,
+    payment: Payment,
+    refundId: string,
+    amount: number,
+  ): Promise<void> {
+    if (!payment.merchantId || !Number.isFinite(amount) || amount <= 0) return;
+    const ledgerAmount = Number(amount.toFixed(2));
+    if (ledgerAmount <= 0) return;
+    const offsetAccount = payment.settlementId
+      ? LedgerAccount.RESERVE
+      : LedgerAccount.PAYOUT;
+
+    await appendLedgerTransaction(manager, {
+      lines: [
+        {
+          merchantId: payment.merchantId,
+          currency: payment.currency,
+          account: LedgerAccount.AVAILABLE,
+          amount: -ledgerAmount,
+          referenceType: LedgerReferenceType.REFUND,
+          referenceId: refundId,
+        },
+        {
+          merchantId: payment.merchantId,
+          currency: payment.currency,
+          account: offsetAccount,
+          amount: ledgerAmount,
+          referenceType: LedgerReferenceType.REFUND,
+          referenceId: refundId,
+        },
+      ],
+    });
   }
 
   private async sendRefundNotifications(
