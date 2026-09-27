@@ -186,3 +186,8 @@ Environment variables:
 │   └── health/
 
 ```
+
+## 📚 Documentation
+
+- [Sessions](docs/SESSIONS.md) — session listing and revocation
+
