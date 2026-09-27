@@ -16,9 +16,16 @@ export enum PaymentStatus {
   PARTIALLY_REFUNDED = 'PARTIALLY_REFUNDED',
   EXPIRED = 'EXPIRED',
   PARTIALLY_COMPLETED = 'PARTIALLY_COMPLETED',
+  OVERDUE = 'OVERDUE',
+}
+
+export enum OverpaymentPolicy {
+  KEEP = 'KEEP',
+  AUTO_REFUND = 'AUTO_REFUND',
 }
 
 @Entity('payments')
+@Index('IDX_payments_customerId_createdAt', ['customerId', 'createdAt'])
 export class Payment {
   @PrimaryGeneratedColumn('uuid')
   id: string;
@@ -49,6 +56,16 @@ export class Payment {
   refundedAmount: number;
 
   @Column({ type: 'decimal', precision: 10, scale: 2, default: 0 })
+  overpaidAmount: number;
+
+  @Column({
+    type: 'enum',
+    enum: OverpaymentPolicy,
+    default: OverpaymentPolicy.KEEP,
+  })
+  overpaymentPolicy: OverpaymentPolicy;
+
+  @Column({ type: 'decimal', precision: 10, scale: 2, default: 0 })
   feeAmount: number;
 
   @Column({ type: 'decimal', precision: 10, scale: 2, default: 0 })
@@ -69,14 +86,31 @@ export class Payment {
   @Column({ nullable: true })
   merchantId: string | null = null;
 
+  @Column({ nullable: true, length: 200 })
+  customerId: string | null = null;
+
+  @Index('IDX_payments_recurringPaymentId')
+  @Column({ type: 'uuid', nullable: true })
+  recurringPaymentId: string | null = null;
+
   @Column({ nullable: true })
   merchantEmail: string | null = null;
 
   @Column({ nullable: true })
   payerEmail: string | null = null;
 
+  @Column({ nullable: true })
+  payerName: string | null = null;
+
+  @Column({ nullable: true })
+  payerPhone: string | null = null;
+
   @Column({ type: 'jsonb', nullable: true })
   metadata: Record<string, string> | null = null;
+
+  @Index('IDX_payments_tags', { synchronize: false })
+  @Column({ type: 'text', array: true, default: () => "'{}'" })
+  tags: string[] = [];
 
   @Index()
   @Column({ nullable: true })
@@ -84,6 +118,13 @@ export class Payment {
 
   @Column({ nullable: true })
   paymentLinkId: string | null = null;
+
+  @Index()
+  @Column({ type: 'timestamp', nullable: true })
+  dueDate: Date | null = null;
+
+  @Column({ default: true })
+  remindersEnabled: boolean = true;
 
   @CreateDateColumn()
   createdAt: Date;

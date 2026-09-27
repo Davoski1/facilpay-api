@@ -9,6 +9,7 @@ import {
   HttpCode,
   HttpStatus,
   UseGuards,
+  Query,
 } from '@nestjs/common';
 import {
   ApiTags,
@@ -33,13 +34,20 @@ import { WebhookEndpoint, WEBHOOK_EVENT_TYPES } from './entities/webhook-endpoin
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { User } from '../users/user.entity';
+import { EmailNotificationService } from '../notifications/email-notification.service';
+import { ConfigService } from '@nestjs/config';
+import { ReplayWebhooksDto } from './dto/replay-webhooks.dto';
 
 @ApiTags('webhooks')
 @ApiBearerAuth('bearer')
 @UseGuards(JwtAuthGuard)
 @Controller('v1/webhooks')
 export class WebhooksController {
-  constructor(private readonly webhooksService: WebhooksService) { }
+  constructor(
+    private readonly webhooksService: WebhooksService,
+    private readonly emailNotificationService: EmailNotificationService,
+    private readonly configService: ConfigService,
+  ) { }
 
   @Post()
   @ApiOperation({
@@ -313,5 +321,63 @@ export class WebhooksController {
     @CurrentUser() user: User,
   ): Promise<void> {
     return this.webhooksService.retryFailedDelivery(deliveryId, user.id);
+  }
+
+  @Post(':id/replay')
+  @HttpCode(HttpStatus.ACCEPTED)
+  @ApiOperation({
+    summary: 'Replay webhook events in a time range',
+    description:
+      'Queues matching events in chronological order. Replay windows are limited to 7 days and 10000 events.',
+  })
+  @ApiParam({ name: 'id', description: 'Webhook endpoint UUID' })
+  @ApiBody({ type: ReplayWebhooksDto })
+  @ApiResponse({ status: HttpStatus.ACCEPTED, description: 'Replay queued.' })
+  @ApiBadRequestResponse({ description: 'Invalid replay window or event limit exceeded.' })
+  @ApiNotFoundResponse({ description: 'Webhook endpoint not found.' })
+  @ApiForbiddenResponse({ description: 'Endpoint belongs to a different merchant.' })
+  replay(
+    @Param('id') id: string,
+    @Body() dto: ReplayWebhooksDto,
+    @CurrentUser() user: User,
+  ) {
+    return this.webhooksService.replayEvents(id, user.id, dto);
+  }
+
+  @Get('replays/:jobId')
+  @ApiOperation({ summary: 'Get webhook replay progress' })
+  @ApiParam({ name: 'jobId', description: 'Replay job UUID' })
+  @ApiOkResponse({ description: 'Current replay progress.' })
+  @ApiNotFoundResponse({ description: 'Replay job not found.' })
+  @ApiForbiddenResponse({ description: 'Replay belongs to a different merchant.' })
+  getReplayProgress(
+    @Param('jobId') jobId: string,
+    @CurrentUser() user: User,
+  ) {
+    return this.webhooksService.getReplayProgress(jobId, user.id);
+  }
+
+  @Post(':id/enable')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Re-enable a disabled webhook endpoint',
+    description: 'Re-enables a webhook endpoint that was disabled due to too many failures. Resets failure counters.',
+  })
+  @ApiParam({ name: 'id', description: 'Webhook endpoint UUID', example: '123e4567-e89b-12d3-a456-426614174000' })
+  @ApiOkResponse({
+    description: 'Webhook endpoint re-enabled.',
+    type: WebhookEndpoint,
+  })
+  @ApiForbiddenResponse({
+    description: 'Endpoint belongs to a different merchant.',
+  })
+  @ApiNotFoundResponse({
+    description: 'Webhook endpoint not found.',
+  })
+  async reenable(
+    @Param('id') id: string,
+    @CurrentUser() user: User,
+  ): Promise<WebhookEndpoint> {
+    return this.webhooksService.reenableEndpoint(id, user.id);
   }
 }

@@ -4,6 +4,7 @@ import { ConfigModule } from '@nestjs/config';
 import { ScheduleModule } from '@nestjs/schedule';
 import { PaymentsService } from './payments.service';
 import { PaymentsController } from './payments.controller';
+import { CustomerPaymentsController } from './customer-payments.controller';
 import { Payment } from './payment.entity';
 import { Refund } from './refund.entity';
 import { PaymentSplit } from './payment-split.entity';
@@ -27,10 +28,14 @@ import { DisputesController } from './disputes.controller';
 import { Dispute } from './dispute.entity';
 import { NotificationsModule } from '../notifications/notifications.module';
 import { RecurringPayment } from './recurring-payment.entity';
+import { RecurringPaymentCharge } from './recurring-payment-charge.entity';
 import { RecurringPaymentsService } from './recurring-payments.service';
 import { RecurringPaymentsController } from './recurring-payments.controller';
 import { MerchantFeesController } from './merchant-fees.controller';
 import { InvoiceService } from './invoice.service';
+import { EventsModule } from '../events/events.module';
+import { TestModeController } from './test-mode.controller';
+import { TestnetOnlyGuard } from './guards/testnet-only.guard';
 
 @Module({
   imports: [
@@ -44,7 +49,9 @@ import { InvoiceService } from './invoice.service';
       MerchantFeeConfig,
       Dispute,
       RecurringPayment,
+      RecurringPaymentCharge,
       SettlementAdjustment,
+      InvoiceReminder,
     ]),
     WebhooksModule,
     StellarModule,
@@ -52,14 +59,18 @@ import { InvoiceService } from './invoice.service';
     UsersModule,
     PaymentLinksModule,
     NotificationsModule,
+    EventsModule,
   ],
   controllers: [
     PaymentsController,
+    CustomerPaymentsController,
     CurrenciesController,
     PaymentQrController,
     DisputesController,
     RecurringPaymentsController,
     MerchantFeesController,
+    RefundsController,
+    TestModeController,
   ],
   providers: [
     PaymentsService,
@@ -72,6 +83,8 @@ import { InvoiceService } from './invoice.service';
     PaymentSseService,
     RecurringPaymentsService,
     InvoiceService,
+    InvoiceReminderService,
+    TestnetOnlyGuard,
   ],
   exports: [
     PaymentsService,

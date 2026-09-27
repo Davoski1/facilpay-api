@@ -16,6 +16,10 @@ import { ConfigService } from '@nestjs/config';
 import { PaymentSseService } from './payment-sse.service';
 import { GetPaymentsDto, PaymentSortBy } from './dto/get-payments.dto';
 import { SortOrder } from '../../common/dto/pagination.dto';
+import { Dispute } from './dispute.entity';
+import { SettlementAdjustment } from '../settlements/entities/settlement-adjustment.entity';
+import { UsersService } from '../users/users.service';
+import { PaymentLinksService } from '../payment-links/payment-links.service';
 
 describe('PaymentsService', () => {
   let service: PaymentsService;
@@ -72,13 +76,22 @@ describe('PaymentsService', () => {
   const createQueryBuilderMock = () => {
     const qb: any = {};
     qb.andWhere = jest.fn().mockReturnValue(qb);
+    qb.where = jest.fn().mockReturnValue(qb);
+    qb.select = jest.fn().mockReturnValue(qb);
+    qb.addSelect = jest.fn().mockReturnValue(qb);
+    qb.groupBy = jest.fn().mockReturnValue(qb);
     qb.orderBy = jest.fn().mockReturnValue(qb);
     qb.addOrderBy = jest.fn().mockReturnValue(qb);
     qb.skip = jest.fn().mockReturnValue(qb);
     qb.take = jest.fn().mockReturnValue(qb);
     qb.getMany = jest.fn().mockResolvedValue([mockPayment1, mockPayment2]);
     qb.getManyAndCount = jest.fn().mockResolvedValue([[mockPayment1, mockPayment2], 2]);
+    qb.getRawMany = jest.fn().mockResolvedValue([]);
     return qb;
+  };
+
+  const mockCustomerRepository = {
+    findOneBy: jest.fn(),
   };
 
   const mockPaymentRepository = {
@@ -94,6 +107,9 @@ describe('PaymentsService', () => {
     find: jest.fn().mockResolvedValue([mockPayment1]),
     findOneBy: jest.fn().mockResolvedValue(mockPayment1),
     createQueryBuilder: jest.fn(),
+    manager: {
+      getRepository: jest.fn(() => mockCustomerRepository),
+    },
   };
 
   const mockDataSource = {
@@ -120,6 +136,7 @@ describe('PaymentsService', () => {
   };
 
   beforeEach(async () => {
+    mockCustomerRepository.findOneBy.mockReset();
     queryBuilderMock = createQueryBuilderMock();
     mockPaymentRepository.createQueryBuilder.mockReturnValue(queryBuilderMock);
 
@@ -157,11 +174,27 @@ describe('PaymentsService', () => {
         },
         {
           provide: getRepositoryToken(PaymentSplit),
-          useValue: { create: jest.fn(), save: jest.fn(), find: jest.fn(), findOneBy: jest.fn() },
+          useValue: { create: jest.fn(), save: jest.fn(), find: jest.fn().mockResolvedValue([]), findOneBy: jest.fn() },
         },
         {
           provide: getRepositoryToken(MerchantFeeConfig),
           useValue: { create: jest.fn(), save: jest.fn(), find: jest.fn(), findOneBy: jest.fn() },
+        },
+        {
+          provide: getRepositoryToken(Dispute),
+          useValue: { find: jest.fn().mockResolvedValue([]) },
+        },
+        {
+          provide: getRepositoryToken(SettlementAdjustment),
+          useValue: { create: jest.fn(), save: jest.fn() },
+        },
+        {
+          provide: UsersService,
+          useValue: { findOne: jest.fn().mockResolvedValue({ id: 'merchant-1' }) },
+        },
+        {
+          provide: PaymentLinksService,
+          useValue: { incrementCompletions: jest.fn() },
         },
         {
           provide: PaymentSseService,
@@ -212,6 +245,18 @@ describe('PaymentsService', () => {
         return defaultValue;
       }) };
 
+      mockDataSource.createQueryRunner.mockReturnValue({
+        connect: jest.fn(),
+        startTransaction: jest.fn(),
+        commitTransaction: jest.fn(),
+        rollbackTransaction: jest.fn(),
+        release: jest.fn(),
+        manager: {
+          create: jest.fn((_entity, data) => data),
+          save: jest.fn(async (payment) => ({ id: 'uuid-123', ...payment })),
+        },
+      });
+
       service = new PaymentsService(
         mockPaymentRepository as any,
         {} as any,
@@ -227,13 +272,14 @@ describe('PaymentsService', () => {
         configService as any,
         {} as any,
         {} as any,
+        {} as any,
       );
 
       await expect(service.create({ amount: 50, currency: 'USD', payerEmail: 'user@example.com' })).resolves.toBeDefined();
       await expect(service.create({ amount: 50, currency: 'EUR', payerEmail: 'user@example.com' })).resolves.toBeDefined();
 
       expect(queryBuilderMock.where).toHaveBeenCalledWith('payment.createdAt >= :start', { start: expect.any(Date) });
-      expect(queryBuilderMock.where).toHaveBeenCalledWith('payment.createdAt <= :end', { end: expect.any(Date) });
+      expect(queryBuilderMock.andWhere).toHaveBeenCalledWith('payment.createdAt <= :end', { end: expect.any(Date) });
       expect(getRawOne).toHaveBeenCalledTimes(2);
       expect(queryBuilderMock.andWhere).toHaveBeenCalledWith('payment.currency = :currency', { currency: 'USD' });
       expect(queryBuilderMock.andWhere).toHaveBeenCalledWith('payment.currency = :currency', { currency: 'EUR' });
@@ -274,7 +320,78 @@ describe('PaymentsService', () => {
       expect(mockQueryRunner.manager.save).toHaveBeenCalled();
       expect(mockQueryRunner.commitTransaction).toHaveBeenCalled();
       expect(mockQueryRunner.release).toHaveBeenCalled();
-      expect(result.id).toEqual('uuid-123');
+      expect(result.id).toEqual('uuid-001');
+    });
+
+    it('persists an owned customerId and uses the customer merchant', async () => {
+      mockCustomerRepository.findOneBy.mockResolvedValueOnce({
+        id: 'customer-1',
+        merchantId: 'merchant-1',
+      });
+      const mockQueryRunner = {
+        connect: jest.fn(),
+        startTransaction: jest.fn(),
+        commitTransaction: jest.fn(),
+        rollbackTransaction: jest.fn(),
+        release: jest.fn(),
+        manager: {
+          create: jest.fn((_entity, data) => data),
+          save: jest.fn(async (payment) => ({ id: 'payment-1', ...payment })),
+        },
+      };
+      (dataSource.createQueryRunner as jest.Mock).mockReturnValue(
+        mockQueryRunner,
+      );
+
+      await service.create(
+        {
+          amount: 100,
+          currency: 'USD',
+          customerId: 'customer-1',
+        },
+        'merchant-1',
+      );
+
+      expect(mockQueryRunner.manager.create).toHaveBeenCalledWith(
+        Payment,
+        expect.objectContaining({
+          customerId: 'customer-1',
+          merchantId: 'merchant-1',
+        }),
+      );
+    });
+
+    it('rejects a customer owned by another merchant and rolls back', async () => {
+      mockCustomerRepository.findOneBy.mockResolvedValueOnce({
+        id: 'customer-1',
+        merchantId: 'merchant-2',
+      });
+      const mockQueryRunner = {
+        connect: jest.fn(),
+        startTransaction: jest.fn(),
+        commitTransaction: jest.fn(),
+        rollbackTransaction: jest.fn(),
+        release: jest.fn(),
+        manager: {
+          create: jest.fn(),
+        },
+      };
+      (dataSource.createQueryRunner as jest.Mock).mockReturnValue(
+        mockQueryRunner,
+      );
+
+      await expect(
+        service.create(
+          {
+            amount: 100,
+            currency: 'USD',
+            customerId: 'customer-1',
+          },
+          'merchant-1',
+        ),
+      ).rejects.toThrow(BadRequestException);
+      expect(mockQueryRunner.rollbackTransaction).toHaveBeenCalled();
+      expect(mockQueryRunner.manager.create).not.toHaveBeenCalled();
     });
 
     it('should rollback transaction on creation failure', async () => {
@@ -601,6 +718,103 @@ describe('PaymentsService', () => {
     });
   });
 
+  describe('findCustomerPayments', () => {
+    it('paginates customer payments and returns grouped lifetime summaries', async () => {
+      const usdFirstPayment = new Date('2026-01-01T10:00:00.000Z');
+      const usdLastPayment = new Date('2026-02-01T10:00:00.000Z');
+      queryBuilderMock.getManyAndCount.mockResolvedValue([[mockPayment2], 7]);
+      queryBuilderMock.getRawMany.mockResolvedValue([
+        {
+          currency: 'USD',
+          totalPaid: '150.50',
+          totalRefunded: '20.00',
+          paymentCount: '2',
+          firstPaymentAt: usdFirstPayment,
+          lastPaymentAt: usdLastPayment,
+        },
+        {
+          currency: 'EUR',
+          totalPaid: '75.00',
+          totalRefunded: '0',
+          paymentCount: '1',
+          firstPaymentAt: usdFirstPayment,
+          lastPaymentAt: usdFirstPayment,
+        },
+      ]);
+
+      const dto = new GetPaymentsDto();
+      dto.page = 2;
+      dto.limit = 1;
+      const result = await service.findCustomerPayments(
+        'customer-123',
+        'merchant-456',
+        dto,
+      );
+
+      expect(result).toEqual({
+        data: [mockPayment2],
+        total: 7,
+        page: 2,
+        limit: 1,
+        summary: [
+          {
+            currency: 'USD',
+            totalPaid: 150.5,
+            totalRefunded: 20,
+            paymentCount: 2,
+            firstPaymentAt: usdFirstPayment,
+            lastPaymentAt: usdLastPayment,
+          },
+          {
+            currency: 'EUR',
+            totalPaid: 75,
+            totalRefunded: 0,
+            paymentCount: 1,
+            firstPaymentAt: usdFirstPayment,
+            lastPaymentAt: usdFirstPayment,
+          },
+        ],
+      });
+      expect(queryBuilderMock.andWhere).toHaveBeenCalledWith(
+        'payment.customerId = :customerId',
+        { customerId: 'customer-123' },
+      );
+      expect(queryBuilderMock.andWhere).toHaveBeenCalledWith(
+        'payment.merchantId = :merchantId',
+        { merchantId: 'merchant-456' },
+      );
+      expect(queryBuilderMock.skip).toHaveBeenCalledWith(1);
+      expect(queryBuilderMock.take).toHaveBeenCalledWith(1);
+      expect(queryBuilderMock.getRawMany).toHaveBeenCalled();
+      expect(queryBuilderMock.addSelect).toHaveBeenCalledWith(
+        'COALESCE(SUM(payment.amount), 0)',
+        'totalPaid',
+      );
+      expect(queryBuilderMock.addSelect).toHaveBeenCalledWith(
+        'COALESCE(SUM(payment.refundedAmount), 0)',
+        'totalRefunded',
+      );
+      expect(queryBuilderMock.addSelect).toHaveBeenCalledWith(
+        'COUNT(payment.id)',
+        'paymentCount',
+      );
+      expect(queryBuilderMock.where).toHaveBeenCalledWith(
+        'payment.customerId = :customerId',
+        { customerId: 'customer-123' },
+      );
+      expect(queryBuilderMock.andWhere).toHaveBeenCalledWith(
+        'payment.status IN (:...summaryStatuses)',
+        {
+          summaryStatuses: [
+            PaymentStatus.COMPLETED,
+            PaymentStatus.PARTIALLY_REFUNDED,
+            PaymentStatus.REFUNDED,
+          ],
+        },
+      );
+    });
+  });
+
   describe('findOne', () => {
     it('should return a single payment', async () => {
       const result = await service.findOne('uuid-001');
@@ -629,6 +843,7 @@ describe('PaymentsService', () => {
         status: PaymentStatus.COMPLETED,
         externalReference: 'EXT-999',
       };
+      mockPaymentRepository.find.mockResolvedValueOnce([]);
 
       const mockQueryRunner = {
         connect: jest.fn(),
