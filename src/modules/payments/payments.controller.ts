@@ -2,6 +2,7 @@ import {
   Controller,
   Get,
   Post,
+  Patch,
   Body,
   Param,
   Query,
@@ -54,6 +55,7 @@ import {
 } from './export/payments-exporter';
 
 import { CreatePaymentDto } from './dto/create-payment.dto';
+import { UpdatePaymentDto } from './dto/update-payment.dto';
 import { BulkCreatePaymentsResponseDto } from './dto/bulk-create-payments-response.dto';
 import { RefundPaymentDto } from './dto/refund-payment.dto';
 import { PaymentWebhookDto } from './dto/payment-webhook.dto';
@@ -72,6 +74,8 @@ import { UpsertMerchantFeeConfigDto } from './dto/upsert-merchant-fee-config.dto
 import { RolesGuard } from '../auth/roles.guard';
 import { Roles } from '../auth/decorators/roles.decorator';
 import { UserRole } from '../../common/constants/roles';
+import { CurrentUser } from '../auth/decorators/current-user.decorator';
+import { User } from '../users/user.entity';
 
 @ApiTags('payments')
 @Controller('v1/payments')
@@ -183,11 +187,10 @@ export class PaymentsController {
       extractClientIp(req, this.trustedProxies),
       testModeHeader === 'true',
     );
-    if (!createPaymentDto.payerLocale) {
-      createPaymentDto.payerLocale =
-        resolveLocaleFromAcceptLanguage(req.headers['accept-language']) ?? undefined;
-    }
-    return this.paymentsService.create(createPaymentDto);
+    return this.paymentsService.create(
+      createPaymentDto,
+      req.user?.id?.toString(),
+    );
   }
 
   @BulkThrottle()
@@ -225,7 +228,10 @@ export class PaymentsController {
       },
     },
   })
-  async createBulk(@Body() createPaymentDtos: CreatePaymentDto[]) {
+  async createBulk(
+    @Body() createPaymentDtos: CreatePaymentDto[],
+    @CurrentUser() user?: User,
+  ) {
     if (!Array.isArray(createPaymentDtos)) {
       throw new BadRequestException(
         'Request body must be an array of payment objects.',
@@ -253,7 +259,10 @@ export class PaymentsController {
       throw new BadRequestException(errors);
     }
 
-    return this.paymentsService.createBulk(paymentInstances);
+    return this.paymentsService.createBulk(
+      paymentInstances,
+      user?.id,
+    );
   }
 
   @Get('export')
@@ -503,6 +512,45 @@ export class PaymentsController {
     const payment = await this.paymentsService.findOne(id);
     const refunds = await this.paymentsService.getRefunds(id);
     return { ...payment, refunds };
+  }
+
+  @Patch(':id')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth('bearer')
+  @ApiOperation({
+    summary: 'Update payment details',
+    description:
+      'Updates only description, metadata, and externalReference on a payment owned by the authenticated merchant. Financial, status, merchant, and settlement fields are immutable.',
+  })
+  @ApiParam({
+    name: 'id',
+    description: 'Payment UUID',
+    example: '123e4567-e89b-12d3-a456-426614174000',
+  })
+  @ApiBody({ type: UpdatePaymentDto })
+  @ApiOkResponse({ description: 'Payment updated.', type: Payment })
+  @ApiBadRequestResponse({
+    description:
+      'No editable field was supplied or an immutable field was included.',
+  })
+  @ApiNotFoundResponse({
+    description:
+      'Payment not found or not owned by the authenticated merchant.',
+  })
+  @ApiUnauthorizedResponse({ description: 'Missing or invalid bearer token.' })
+  update(
+    @Param('id') id: string,
+    @Body() dto: UpdatePaymentDto,
+    @CurrentUser() user: User,
+    @Req() req: Request,
+  ): Promise<Payment> {
+    return this.paymentsService.update(
+      id,
+      dto,
+      user.id,
+      req.ip,
+      req.headers['user-agent'],
+    );
   }
 
   @WebhookThrottle()

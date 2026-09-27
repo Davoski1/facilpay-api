@@ -1,0 +1,56 @@
+import { ApiPropertyOptional } from '@nestjs/swagger';
+import { Type } from 'class-transformer';
+import {
+  IsEnum,
+  IsInt,
+  IsISO8601,
+  IsOptional,
+  IsString,
+  Length,
+  Max,
+  Min,
+} from 'class-validator';
+import { LedgerAccount, LedgerReferenceType } from '../ledger-entry.entity';
+
+export class GetLedgerEntriesDto {
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @IsOptional()
+  @ApiPropertyOptional({ default: 1, minimum: 1 })
+  page: number = 1;
+
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(100)
+  @IsOptional()
+  @ApiPropertyOptional({ default: 20, minimum: 1, maximum: 100 })
+  limit: number = 20;
+
+  @IsString()
+  @Length(3, 3)
+  @IsOptional()
+  @ApiPropertyOptional({ example: 'USD' })
+  currency?: string;
+
+  @IsEnum(LedgerAccount)
+  @IsOptional()
+  @ApiPropertyOptional({ enum: LedgerAccount })
+  account?: LedgerAccount;
+
+  @IsEnum(LedgerReferenceType)
+  @IsOptional()
+  @ApiPropertyOptional({ enum: LedgerReferenceType })
+  referenceType?: LedgerReferenceType;
+
+  @IsISO8601()
+  @IsOptional()
+  @ApiPropertyOptional({ example: '2026-01-01T00:00:00.000Z' })
+  from?: string;
+
+  @IsISO8601()
+  @IsOptional()
+  @ApiPropertyOptional({ example: '2026-12-31T23:59:59.999Z' })
+  to?: string;
+}

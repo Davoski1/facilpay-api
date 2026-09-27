@@ -44,10 +44,10 @@ export class Payment {
   status: PaymentStatus;
 
   @Column({ nullable: true })
-  externalReference: string;
+  externalReference: string | null;
 
   @Column({ nullable: true })
-  description: string;
+  description: string | null;
 
   @Column({ type: 'varchar', nullable: true, length: 2048 })
   callbackUrl: string | null;

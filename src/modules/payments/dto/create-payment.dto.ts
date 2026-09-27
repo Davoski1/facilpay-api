@@ -10,6 +10,7 @@ import {
   IsPositive,
   IsObject,
   IsInt,
+  IsUUID,
   IsArray,
   IsBoolean,
   IsDateString,
@@ -20,6 +21,7 @@ import { Type, Transform } from 'class-transformer';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { IsISO4217CurrencyCode } from '../../../common/validators/is-iso4217-currency-code.validator';
 import { CreatePaymentSplitDto } from './create-payment-split.dto';
+import { IsPaymentMetadata } from './payment-metadata.validator';
 import {
   registerDecorator,
   ValidationOptions,
@@ -46,31 +48,6 @@ function IsSplitsSumTo100(validationOptions?: ValidationOptions) {
         },
         defaultMessage(_args: ValidationArguments) {
           return 'splits percentages must sum to exactly 100';
-        },
-      },
-    });
-  };
-}
-
-function IsMetadata(validationOptions?: ValidationOptions) {
-  return function (object: object, propertyName: string) {
-    registerDecorator({
-      name: 'isMetadata',
-      target: (object as any).constructor,
-      propertyName,
-      options: validationOptions,
-      validator: {
-        validate(value: unknown, _args: ValidationArguments) {
-          if (value === undefined || value === null) return true;
-          if (typeof value !== 'object' || Array.isArray(value)) return false;
-          const entries = Object.entries(value as Record<string, unknown>);
-          if (entries.length > 20) return false;
-          return entries.every(
-            ([, v]) => typeof v === 'string' && v.length <= 500,
-          );
-        },
-        defaultMessage(_args: ValidationArguments) {
-          return 'metadata must have at most 20 keys, each value a string of max 500 characters';
         },
       },
     });
@@ -196,18 +173,17 @@ export class CreatePaymentDto {
   })
   payerEmail?: string;
 
-  @IsString()
-  @MaxLength(35)
+  @IsUUID('4', { message: 'customerId must be a valid UUID' })
   @IsOptional()
   @ApiPropertyOptional({
     description:
-      'Preferred language for payer emails (e.g. "fr" or "pt-BR"). Defaults to the request Accept-Language header; unsupported languages fall back to English.',
-    example: 'fr',
+      'ID of a customer owned by the authenticated merchant. When provided, the payment merchant is set to the customer owner.',
+    example: '550e8400-e29b-41d4-a716-446655440000',
   })
-  payerLocale?: string;
+  customerId?: string;
 
   @IsObject()
-  @IsMetadata()
+  @IsPaymentMetadata()
   @IsOptional()
   @ApiPropertyOptional({
     description:

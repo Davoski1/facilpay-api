@@ -8,6 +8,7 @@ import {
 import { InjectRepository } from '@nestjs/typeorm';
 import {
   DataSource,
+  EntityManager,
   LessThanOrEqual,
   Repository,
   SelectQueryBuilder,
@@ -264,16 +265,34 @@ export class PaymentsService {
       await queryRunner.connect();
       await queryRunner.startTransaction();
 
+      let merchantId = createPaymentDto.merchantId;
+      if (createPaymentDto.customerId) {
+        const expectedMerchantId =
+          authenticatedMerchantId ?? createPaymentDto.merchantId;
+        if (!expectedMerchantId) {
+          throw new BadRequestException(
+            'A merchant is required when customerId is provided',
+          );
+        }
+        const customer = await resolveCustomerForMerchant(
+          this.paymentRepository.manager.getRepository(Customer),
+          createPaymentDto.customerId,
+          expectedMerchantId,
+          createPaymentDto.merchantId,
+        );
+        merchantId = customer.merchantId;
+      }
+
       this.logger.debug(
         `Starting payment creation transaction for amount: ${createPaymentDto.amount}`,
       );
 
       // Validate merchantId if provided
-      await this.validateMerchantId(createPaymentDto.merchantId);
+      await this.validateMerchantId(merchantId);
 
-      await this.ensurePaymentLimits(createPaymentDto);
+      await this.ensurePaymentLimits({ ...createPaymentDto, merchantId });
       const fee = await this.calculateFee(
-        createPaymentDto.merchantId,
+        merchantId,
         Number(createPaymentDto.amount),
       );
       const expiresInSeconds =
@@ -332,6 +351,7 @@ export class PaymentsService {
 
   async createBulk(
     createPaymentDtos: CreatePaymentDto[],
+    authenticatedMerchantId?: string,
   ): Promise<{ created: number; payments: Payment[] }> {
     const queryRunner = this.dataSource.createQueryRunner();
 
@@ -339,16 +359,42 @@ export class PaymentsService {
       await queryRunner.connect();
       await queryRunner.startTransaction();
 
+      const resolvedPaymentDtos = await Promise.all(
+        createPaymentDtos.map(async (createPaymentDto) => {
+          if (!createPaymentDto.customerId) return createPaymentDto;
+
+          const expectedMerchantId =
+            authenticatedMerchantId ?? createPaymentDto.merchantId;
+          if (!expectedMerchantId) {
+            throw new BadRequestException(
+              'A merchant is required when customerId is provided',
+            );
+          }
+
+          const customer = await resolveCustomerForMerchant(
+            this.paymentRepository.manager.getRepository(Customer),
+            createPaymentDto.customerId,
+            expectedMerchantId,
+            createPaymentDto.merchantId,
+          );
+
+          return {
+            ...createPaymentDto,
+            merchantId: customer.merchantId,
+          };
+        }),
+      );
+
       this.logger.debug(
         `Starting bulk payment creation transaction for ${
-          createPaymentDtos.length
+          resolvedPaymentDtos.length
         } items.`,
       );
 
       // Validate all merchantIds upfront
       const uniqueMerchantIds = [
         ...new Set(
-          createPaymentDtos
+          resolvedPaymentDtos
             .map((dto) => dto.merchantId)
             .filter((id): id is string => id !== undefined),
         ),
@@ -359,7 +405,7 @@ export class PaymentsService {
       }
 
       const paymentPayloads = await Promise.all(
-        createPaymentDtos.map(async (createPaymentDto) => {
+        resolvedPaymentDtos.map(async (createPaymentDto) => {
           await this.ensurePaymentLimits(createPaymentDto);
           const fee = await this.calculateFee(
             createPaymentDto.merchantId,
@@ -383,6 +429,7 @@ export class PaymentsService {
       const payments = paymentPayloads.map((createPaymentDto) =>
         queryRunner.manager.create(Payment, {
           ...createPaymentDto,
+          customerId: createPaymentDto.customerId ?? null,
           status: PaymentStatus.PENDING,
           expiresAt: new Date(
             Date.now() +
@@ -733,6 +780,138 @@ export class PaymentsService {
     return payment;
   }
 
+  async update(
+    id: string,
+    dto: UpdatePaymentDto,
+    actorId: string,
+    ipAddress?: string,
+    userAgent?: string,
+  ): Promise<Payment> {
+    const immutableFields = [
+      'amount',
+      'currency',
+      'status',
+      'merchant',
+      'merchantId',
+      'refundedAmount',
+      'feeAmount',
+      'netAmount',
+      'settlementId',
+      'customerId',
+    ] as const;
+    const attemptedImmutableFields = immutableFields.filter(
+      (field) => dto[field] !== undefined,
+    );
+    if (attemptedImmutableFields.length > 0) {
+      throw new BadRequestException(
+        `Payment fields cannot be updated: ${attemptedImmutableFields.join(', ')}`,
+      );
+    }
+
+    const editableFields = [
+      'description',
+      'metadata',
+      'externalReference',
+    ] as const;
+    if (editableFields.every((field) => dto[field] === undefined)) {
+      throw new BadRequestException(
+        'At least one of description, metadata, or externalReference must be provided',
+      );
+    }
+
+    const queryRunner = this.dataSource.createQueryRunner();
+    try {
+      await queryRunner.connect();
+      await queryRunner.startTransaction();
+
+      const payment = await queryRunner.manager.findOneBy(Payment, {
+        id,
+        merchantId: actorId,
+      });
+      if (!payment) {
+        throw new NotFoundException(`Payment with ID ${id} not found`);
+      }
+
+      const before = {
+        description: payment.description,
+        metadata: payment.metadata ? { ...payment.metadata } : null,
+        externalReference: payment.externalReference,
+      };
+      const after = {
+        description:
+          dto.description === undefined ? before.description : dto.description,
+        metadata:
+          dto.metadata === undefined
+            ? before.metadata
+            : dto.metadata
+              ? { ...dto.metadata }
+              : null,
+        externalReference:
+          dto.externalReference === undefined
+            ? before.externalReference
+            : dto.externalReference,
+      };
+      const changedFields = editableFields.filter(
+        (field) => !isDeepStrictEqual(before[field], after[field]),
+      );
+
+      if (changedFields.length === 0) {
+        await queryRunner.commitTransaction();
+        return payment;
+      }
+
+      payment.description = after.description;
+      payment.metadata = after.metadata;
+      payment.externalReference = after.externalReference;
+      const updatedPayment = await queryRunner.manager.save(payment);
+
+      const auditLog = queryRunner.manager.create(AuditLog, {
+        actorId,
+        actorType: 'user',
+        action: 'payment.updated',
+        resourceType: 'payment',
+        resourceId: id,
+        ipAddress: ipAddress ?? null,
+        userAgent: userAgent ?? null,
+        metadata: { before, after, changedFields },
+      });
+      await queryRunner.manager.save(auditLog);
+
+      await queryRunner.commitTransaction();
+      this.logger.info(
+        { paymentId: id, changedFields },
+        'Payment updated successfully',
+      );
+
+      this.paymentSseService.emit(updatedPayment);
+      await this.webhooksService
+        .dispatchEventToMerchant(actorId, 'payment.updated', {
+          paymentId: updatedPayment.id,
+          before,
+          after,
+          changedFields,
+        })
+        .catch((error: unknown) =>
+          this.logger.error(
+            { paymentId: id, error },
+            'Failed to dispatch payment.updated webhook',
+          ),
+        );
+
+      return updatedPayment;
+    } catch (error) {
+      await queryRunner.rollbackTransaction();
+      this.logger.error(
+        `Payment update failed and rolled back: ${
+          error instanceof Error ? error.message : 'Unknown error'
+        }`,
+      );
+      throw error;
+    } finally {
+      await queryRunner.release();
+    }
+  }
+
   async getRefunds(paymentId: string): Promise<Refund[]> {
     return await this.refundRepository.find({
       where: { paymentId },
@@ -796,12 +975,45 @@ export class PaymentsService {
       },
     });
 
-    // Status changes reflect via updatedAt
-    if (payment.updatedAt && payment.updatedAt > payment.createdAt) {
+    // Status changes reflect via updatedAt. A non-status field update also
+    // changes updatedAt, so PENDING alone must not imply a status transition.
+    if (
+      payment.updatedAt &&
+      payment.updatedAt > payment.createdAt &&
+      payment.status !== PaymentStatus.PENDING
+    ) {
       events.push({
         type: 'payment.status_updated',
         timestamp: payment.updatedAt,
         data: { status: payment.status },
+      });
+    }
+
+    // Mutable-field updates are persisted as audit records and projected into
+    // the payment timeline with their before/after snapshots.
+    const auditLogRepository = this.dataSource.getRepository(AuditLog);
+    const updateAuditLogs = await auditLogRepository.find({
+      where: {
+        action: 'payment.updated',
+        resourceType: 'payment',
+        resourceId: paymentId,
+      },
+      order: { timestamp: 'ASC' },
+    });
+    for (const auditLog of updateAuditLogs) {
+      const metadata = auditLog.metadata as {
+        before?: Record<string, unknown>;
+        after?: Record<string, unknown>;
+        changedFields?: string[];
+      } | null;
+      events.push({
+        type: 'payment.updated',
+        timestamp: auditLog.timestamp,
+        data: {
+          before: metadata?.before ?? null,
+          after: metadata?.after ?? null,
+          changedFields: metadata?.changedFields ?? [],
+        },
       });
     }
 
@@ -992,6 +1204,12 @@ export class PaymentsService {
         );
       }
 
+      await this.appendRefund(
+        queryRunner.manager,
+        payment,
+        savedRefund.id,
+        refundAmount,
+      );
       await queryRunner.commitTransaction();
       this.logger.info(
         `Refund processed: ${savedRefund.id} for payment ${id}, amount: ${refundAmount}`,
@@ -1052,6 +1270,15 @@ export class PaymentsService {
       }
 
       const updatedPayment = await queryRunner.manager.save(payment);
+
+      if (previousStatus !== PaymentStatus.COMPLETED) {
+        if (updatedPayment.status === PaymentStatus.COMPLETED) {
+          await this.appendPaymentCompletion(
+            queryRunner.manager,
+            updatedPayment,
+          );
+        }
+      }
 
       await queryRunner.commitTransaction();
       this.logger.info(
@@ -1363,6 +1590,89 @@ export class PaymentsService {
         )
         .catch(() => {});
     }
+  }
+
+  private async appendPaymentCompletion(
+    manager: EntityManager,
+    payment: Payment,
+  ): Promise<void> {
+    if (!payment.merchantId) return;
+    const grossValue = Number(payment.amount);
+    if (!Number.isFinite(grossValue) || grossValue <= 0) return;
+    const gross = Number(grossValue.toFixed(2));
+    const availableValue = Number(payment.netAmount ?? gross);
+    const available = Number.isFinite(availableValue)
+      ? Number(availableValue.toFixed(2))
+      : gross;
+    const fee = gross - available;
+    const lines = [
+      {
+        merchantId: payment.merchantId,
+        currency: payment.currency,
+        account: LedgerAccount.PENDING,
+        amount: -gross,
+        referenceType: LedgerReferenceType.PAYMENT,
+        referenceId: payment.id,
+      },
+    ];
+
+    if (available !== 0) {
+      lines.push({
+        merchantId: payment.merchantId,
+        currency: payment.currency,
+        account: LedgerAccount.AVAILABLE,
+        amount: available,
+        referenceType: LedgerReferenceType.PAYMENT,
+        referenceId: payment.id,
+      });
+    }
+    if (fee !== 0) {
+      lines.push({
+        merchantId: payment.merchantId,
+        currency: payment.currency,
+        account: LedgerAccount.FEES,
+        amount: fee,
+        referenceType: LedgerReferenceType.FEE,
+        referenceId: payment.id,
+      });
+    }
+
+    await appendLedgerTransaction(manager, { lines });
+  }
+
+  private async appendRefund(
+    manager: EntityManager,
+    payment: Payment,
+    refundId: string,
+    amount: number,
+  ): Promise<void> {
+    if (!payment.merchantId || !Number.isFinite(amount) || amount <= 0) return;
+    const ledgerAmount = Number(amount.toFixed(2));
+    if (ledgerAmount <= 0) return;
+    const offsetAccount = payment.settlementId
+      ? LedgerAccount.RESERVE
+      : LedgerAccount.PAYOUT;
+
+    await appendLedgerTransaction(manager, {
+      lines: [
+        {
+          merchantId: payment.merchantId,
+          currency: payment.currency,
+          account: LedgerAccount.AVAILABLE,
+          amount: -ledgerAmount,
+          referenceType: LedgerReferenceType.REFUND,
+          referenceId: refundId,
+        },
+        {
+          merchantId: payment.merchantId,
+          currency: payment.currency,
+          account: offsetAccount,
+          amount: ledgerAmount,
+          referenceType: LedgerReferenceType.REFUND,
+          referenceId: refundId,
+        },
+      ],
+    });
   }
 
   private async sendRefundNotifications(
