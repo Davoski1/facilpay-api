@@ -64,6 +64,7 @@ whether it is required in production.
 | `STELLAR_HORIZON_URL` | Horizon endpoint | `https://horizon-testnet.stellar.org` | No | `https://horizon.stellar.org` |
 | `STELLAR_BASE_FEE` | Base fee (stroops) | `100` | No | `100` |
 | `STELLAR_SOURCE_SECRET` | Secret key of the platform distribution account | *(placeholder)* | **Yes** | `S...` |
+| `PAYOUT_DAILY_LIMIT` | Default maximum total of `POST /v1/payouts` per merchant, currency and UTC day (admins can override per merchant) | `10000` | No | `5000` |
 
 ## Email / SMTP
 

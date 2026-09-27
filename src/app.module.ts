@@ -27,6 +27,7 @@ import { SecurityHeadersMiddleware } from './common/middleware/security-headers.
 import { AuditLogsModule } from './modules/audit-logs/audit-logs.module';
 import { EventsModule } from './modules/events/events.module';
 import { ReportsModule } from './modules/reports/reports.module';
+import { PayoutsModule } from './modules/payouts/payouts.module';
 
 @Module({
   imports: [
@@ -60,6 +61,7 @@ import { ReportsModule } from './modules/reports/reports.module';
     AuditLogsModule,
     EventsModule,
     ReportsModule,
+    PayoutsModule,
   ],
   controllers: [AppController],
   providers: [AppService],
