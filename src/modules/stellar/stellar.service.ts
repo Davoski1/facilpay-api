@@ -9,11 +9,11 @@ import { SignTransactionDto } from './dto/sign-transaction.dto';
 import { AddTrustlineDto } from './dto/add-trustline.dto';
 import { RemoveTrustlineDto } from './dto/remove-trustline.dto';
 import { WebhooksService } from '../webhooks/webhooks.service';
+import { StellarHorizonClientService } from './stellar-horizon-client.service';
 
 @Injectable()
 export class StellarService {
   private readonly logger = new Logger(StellarService.name);
-  private readonly server: StellarSdk.Horizon.Server;
   private readonly networkPassphrase: string;
   private readonly sourceKeypair: StellarSdk.Keypair;
 
@@ -25,21 +25,24 @@ export class StellarService {
     private readonly assetRepo: Repository<StellarAsset>,
     @Inject(forwardRef(() => WebhooksService))
     private readonly webhooksService: WebhooksService,
+    private readonly horizonClientService: StellarHorizonClientService,
   ) {
-    const horizonUrl = this.configService.get<string>('STELLAR_HORIZON_URL');
-    const network = this.configService.get<string>('STELLAR_NETWORK');
     const secret = this.configService.get<string>('STELLAR_SOURCE_SECRET');
+    const network = this.configService.get<string>('STELLAR_NETWORK');
 
-    if (!horizonUrl || !secret) {
-      throw new Error('Stellar configuration is missing. Check STELLAR_HORIZON_URL and STELLAR_SOURCE_SECRET in .env');
+    if (!secret) {
+      throw new Error('Stellar configuration is missing. Check STELLAR_SOURCE_SECRET in .env');
     }
 
-    this.server = new StellarSdk.Horizon.Server(horizonUrl);
-    this.networkPassphrase = network === 'PUBLIC' 
-      ? StellarSdk.Networks.PUBLIC 
+    this.networkPassphrase = network === 'PUBLIC'
+      ? StellarSdk.Networks.PUBLIC
       : StellarSdk.Networks.TESTNET;
-    
+
     this.sourceKeypair = StellarSdk.Keypair.fromSecret(secret);
+  }
+
+  private getServer(): StellarSdk.Horizon.Server {
+    return this.horizonClientService.getHealthyServer();
   }
 
   async sendPayment(destination: string, amount: string, memo?: string, merchantId?: string) {
@@ -54,7 +57,7 @@ export class StellarService {
     attemptNumber: number,
   ) {
     try {
-      const sourceAccount = await this.server.loadAccount(this.sourceKeypair.publicKey());
+      const sourceAccount = await this.getServer().loadAccount(this.sourceKeypair.publicKey());
 
       const baseFee = this.configService.get<string>('STELLAR_BASE_FEE', '100');
       const fee = String(parseInt(baseFee) * (attemptNumber + 1));
@@ -116,7 +119,7 @@ export class StellarService {
         };
       }
 
-      const response = await this.server.submitTransaction(transaction);
+      const response = await this.getServer().submitTransaction(transaction);
 
       this.logger.log(`Payment successful: ${response.hash}`);
       return {
@@ -162,7 +165,7 @@ export class StellarService {
       );
 
       feeBumpTx.sign(this.sourceKeypair);
-      const response = await this.server.submitTransaction(feeBumpTx);
+      const response = await this.getServer().submitTransaction(feeBumpTx);
 
       this.logger.log(`Fee-bump transaction submitted: ${response.hash}`);
       return {
@@ -182,7 +185,7 @@ export class StellarService {
 
     let account: StellarSdk.Horizon.AccountResponse;
     try {
-      account = await this.server.loadAccount(address);
+      account = await this.getServer().loadAccount(address);
     } catch {
       throw new BadRequestException('Stellar payout account does not exist');
     }
@@ -228,7 +231,7 @@ export class StellarService {
       
       transaction.addSignature(hint, signature);
 
-      const sourceAccount = await this.server.loadAccount(multiSigTx.sourceAccount);
+      const sourceAccount = await this.getServer().loadAccount(multiSigTx.sourceAccount);
       const signer = sourceAccount.signers.find(s => s.key === dto.publicKey);
       const weight = signer ? signer.weight : 0;
 
@@ -242,7 +245,7 @@ export class StellarService {
 
       if (multiSigTx.collectedSignatures >= multiSigTx.requiredSignatures) {
         this.logger.log(`Threshold reached for tx ${id}. Submitting...`);
-        const response = await this.server.submitTransaction(transaction);
+        const response = await this.getServer().submitTransaction(transaction);
         multiSigTx.status = MultiSigTransactionStatus.SUBMITTED;
         multiSigTx.transactionHash = response.hash;
         this.logger.log(`Multi-sig transaction submitted successfully: ${response.hash}`);
@@ -354,7 +357,7 @@ export class StellarService {
 
     let account: StellarSdk.Horizon.AccountResponse | undefined;
     try {
-      account = await this.server.loadAccount(this.sourceKeypair.publicKey());
+      account = await this.getServer().loadAccount(this.sourceKeypair.publicKey());
     } catch (error) {
       this.logger.error('Failed to load Stellar account for balances', error);
     }
