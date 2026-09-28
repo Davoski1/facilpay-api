@@ -1,4 +1,4 @@
-import { MigrationInterface, QueryRunner, Table, Index } from 'typeorm';
+import { MigrationInterface, QueryRunner, Table, TableIndex } from 'typeorm';
 
 export class CreatePasswordResetTokensTable1706000000002
   implements MigrationInterface
@@ -44,7 +44,7 @@ export class CreatePasswordResetTokensTable1706000000002
 
     await queryRunner.createIndex(
       'password_reset_tokens',
-      new Index({
+      new TableIndex({
         name: 'IDX_password_reset_tokens_userId',
         columnNames: ['userId'],
       }),
@@ -52,7 +52,7 @@ export class CreatePasswordResetTokensTable1706000000002
 
     await queryRunner.createIndex(
       'password_reset_tokens',
-      new Index({
+      new TableIndex({
         name: 'IDX_password_reset_tokens_tokenHash',
         columnNames: ['tokenHash'],
       }),
@@ -60,7 +60,7 @@ export class CreatePasswordResetTokensTable1706000000002
 
     await queryRunner.createIndex(
       'password_reset_tokens',
-      new Index({
+      new TableIndex({
         name: 'IDX_password_reset_tokens_expiresAt',
         columnNames: ['expiresAt'],
       }),

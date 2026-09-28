@@ -1,4 +1,4 @@
-import { MigrationInterface, QueryRunner, Table, Index } from 'typeorm';
+import { MigrationInterface, QueryRunner, Table, TableIndex } from 'typeorm';
 
 export class CreateIdempotencyKeysTable1706000000000
   implements MigrationInterface
@@ -37,7 +37,7 @@ export class CreateIdempotencyKeysTable1706000000000
 
     await queryRunner.createIndex(
       'idempotency_keys',
-      new Index({
+      new TableIndex({
         name: 'IDX_idempotency_keys_expiresAt',
         columnNames: ['expiresAt'],
       }),

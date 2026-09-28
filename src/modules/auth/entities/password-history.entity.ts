@@ -7,7 +7,7 @@ import {
 } from 'typeorm';
 
 @Entity('password_history')
-@Index(['userId', 'createdAt'], { order: { createdAt: 'DESC' } })
+@Index(['userId', 'createdAt'])
 export class PasswordHistory {
   @PrimaryGeneratedColumn('uuid')
   id: string;
