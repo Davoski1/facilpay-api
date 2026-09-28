@@ -9,11 +9,11 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import * as StellarSdk from '@stellar/stellar-sdk';
 import { Payment, PaymentStatus } from '../payments/payment.entity';
+import { StellarHorizonClientService } from './stellar-horizon-client.service';
 
 @Injectable()
 export class StellarHorizonStreamService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(StellarHorizonStreamService.name);
-  private readonly server: StellarSdk.Horizon.Server;
   private readonly merchantAccountId: string;
   private streamClose: (() => void) | null = null;
   private reconnectTimer: NodeJS.Timeout | null = null;
@@ -24,16 +24,14 @@ export class StellarHorizonStreamService implements OnModuleInit, OnModuleDestro
   private readonly maxDelayMs: number;
   private currentDelayMs: number;
   private failureCount = 0;
+  private lastCursor = 'now';
 
   constructor(
     private readonly configService: ConfigService,
     @InjectRepository(Payment)
     private readonly paymentRepository: Repository<Payment>,
+    private readonly horizonClientService: StellarHorizonClientService,
   ) {
-    const horizonUrl =
-      this.configService.get<string>('STELLAR_HORIZON_URL') ||
-      'https://horizon-testnet.stellar.org';
-    this.server = new StellarSdk.Horizon.Server(horizonUrl);
     this.merchantAccountId =
       this.configService.get<string>('STELLAR_MERCHANT_ACCOUNT_ID') || '';
     this.baseDelayMs = this.configService.get<number>('STELLAR_RECONNECT_BASE_DELAY_MS', 1000);
@@ -66,10 +64,11 @@ export class StellarHorizonStreamService implements OnModuleInit, OnModuleDestro
 
   private startStream(): void {
     try {
-      const close = this.server
+      const server = this.horizonClientService.getHealthyServer();
+      const close = server
         .payments()
         .forAccount(this.merchantAccountId)
-        .cursor('now')
+        .cursor(this.lastCursor)
         .stream({
           onmessage: (record: any) => void this.handleRecord(record),
           onerror: (error: any) => {
@@ -128,6 +127,9 @@ export class StellarHorizonStreamService implements OnModuleInit, OnModuleDestro
 
   private async handleRecord(record: any): Promise<void> {
     if (record.type !== 'payment') return;
+
+    // Update cursor for stream resumption
+    this.lastCursor = record.paging_token || this.lastCursor;
 
     const destination: string = record.to ?? '';
     if (destination !== this.merchantAccountId) return;

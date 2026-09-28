@@ -6,6 +6,7 @@ import { DataSource } from 'typeorm';
 import { AppLogger } from '../logger/logger.service';
 import { Logger } from 'pino';
 import { StellarHorizonStreamService } from '../stellar/stellar-horizon-stream.service';
+import { StellarHorizonClientService } from '../stellar/stellar-horizon-client.service';
 import * as os from 'os';
 
 interface HealthCheckResult {
@@ -26,6 +27,12 @@ interface HealthCheckResult {
       status: 'connected' | 'disconnected' | 'disabled';
       message: string;
     };
+    horizonUrls?: Array<{
+      url: string;
+      healthy: boolean;
+      errorCount: number;
+      lastChecked: string;
+    }>;
     queue: {
       status: 'healthy' | 'unhealthy';
       message: string;
@@ -48,6 +55,7 @@ export class HealthService {
   constructor(
     private readonly dataSource: DataSource,
     private readonly horizonStreamService: StellarHorizonStreamService,
+    private readonly horizonClientService: StellarHorizonClientService,
     @InjectQueue('webhooks') private readonly webhooksQueue: Queue,
     appLogger: AppLogger,
   ) {
@@ -67,6 +75,7 @@ export class HealthService {
     const dbStatus = await this.checkDatabase();
     const stellarStatus = await this.checkStellarNetwork();
     const horizonStreamStatus = this.checkHorizonStream();
+    const horizonUrlsStatus = this.horizonClientService.getStatus();
     const queueStatus = await this.checkQueue();
     const systemStatus = this.checkSystem();
 
@@ -93,6 +102,7 @@ export class HealthService {
         database: dbStatus,
         stellar: stellarStatus,
         horizonStream: horizonStreamStatus,
+        horizonUrls: horizonUrlsStatus,
         queue: queueStatus,
         system: systemStatus,
       },

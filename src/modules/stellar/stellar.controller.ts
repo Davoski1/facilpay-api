@@ -173,4 +173,32 @@ export class StellarController {
   async fundTestnetAccount(@Body('address') address: string) {
     return this.stellarService.fundTestnetAccount(address);
   }
+
+  @Get('accounts/:address/validate')
+  @ApiOperation({
+    summary: 'Validate a Stellar address',
+    description:
+      'Validates a Stellar address format, checks if it exists on network, whether it has a trustline for the specified asset, and if it requires a memo (SEP-29). Supports both G... and M... (muxed) addresses.',
+  })
+  @ApiParam({ name: 'address', description: 'Stellar address (G... or M...)', example: 'GABCD...' })
+  @ApiQuery({ name: 'asset', required: false, description: 'Asset code to check trustline (e.g., USDC)', example: 'USDC' })
+  @ApiOkResponse({
+    description: 'Address validation result.',
+    schema: {
+      example: {
+        valid: true,
+        format: 'g',
+        exists: true,
+        hasTrustline: true,
+        requiresMemo: false,
+      },
+    },
+  })
+  @ApiBadRequestResponse({ description: 'Invalid request.' })
+  async validateAddress(
+    @Param('address') address: string,
+    @Query('asset') asset?: string,
+  ): Promise<any> {
+    return this.stellarService.validateAddress(address, asset);
+  }
 }

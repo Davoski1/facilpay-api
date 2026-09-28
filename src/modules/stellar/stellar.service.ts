@@ -9,11 +9,11 @@ import { SignTransactionDto } from './dto/sign-transaction.dto';
 import { AddTrustlineDto } from './dto/add-trustline.dto';
 import { RemoveTrustlineDto } from './dto/remove-trustline.dto';
 import { WebhooksService } from '../webhooks/webhooks.service';
+import { StellarHorizonClientService } from './stellar-horizon-client.service';
 
 @Injectable()
 export class StellarService {
   private readonly logger = new Logger(StellarService.name);
-  private readonly server: StellarSdk.Horizon.Server;
   private readonly networkPassphrase: string;
   private readonly sourceKeypair: StellarSdk.Keypair;
 
@@ -25,20 +25,19 @@ export class StellarService {
     private readonly assetRepo: Repository<StellarAsset>,
     @Inject(forwardRef(() => WebhooksService))
     private readonly webhooksService: WebhooksService,
+    private readonly horizonClientService: StellarHorizonClientService,
   ) {
-    const horizonUrl = this.configService.get<string>('STELLAR_HORIZON_URL');
-    const network = this.configService.get<string>('STELLAR_NETWORK');
     const secret = this.configService.get<string>('STELLAR_SOURCE_SECRET');
+    const network = this.configService.get<string>('STELLAR_NETWORK');
 
-    if (!horizonUrl || !secret) {
-      throw new Error('Stellar configuration is missing. Check STELLAR_HORIZON_URL and STELLAR_SOURCE_SECRET in .env');
+    if (!secret) {
+      throw new Error('Stellar configuration is missing. Check STELLAR_SOURCE_SECRET in .env');
     }
 
-    this.server = new StellarSdk.Horizon.Server(horizonUrl);
-    this.networkPassphrase = network === 'PUBLIC' 
-      ? StellarSdk.Networks.PUBLIC 
+    this.networkPassphrase = network === 'PUBLIC'
+      ? StellarSdk.Networks.PUBLIC
       : StellarSdk.Networks.TESTNET;
-    
+
     this.sourceKeypair = StellarSdk.Keypair.fromSecret(secret);
   }
 
@@ -50,10 +49,13 @@ export class StellarService {
     asset: StellarSdk.Asset = StellarSdk.Asset.native(),
   ) {
     try {
-      const sourceAccount = await this.server.loadAccount(this.sourceKeypair.publicKey());
+      const sourceAccount = await this.getServer().loadAccount(this.sourceKeypair.publicKey());
+
+      const baseFee = this.configService.get<string>('STELLAR_BASE_FEE', '100');
+      const fee = String(parseInt(baseFee) * (attemptNumber + 1));
 
       let transactionBuilder = new StellarSdk.TransactionBuilder(sourceAccount, {
-        fee: this.configService.get<string>('STELLAR_BASE_FEE', '100'),
+        fee,
         networkPassphrase: this.networkPassphrase,
       })
         .addOperation(
@@ -81,7 +83,7 @@ export class StellarService {
 
       if (requiresMultiSig) {
         this.logger.log(`Transaction requires multi-sig. Threshold: ${medThreshold}, current weight: ${myWeight}`);
-        
+
         const multiSigTx = this.multiSigRepo.create({
           xdr: transaction.toXDR(),
           sourceAccount: sourceAccount.id,
@@ -90,18 +92,17 @@ export class StellarService {
           signers: [this.sourceKeypair.publicKey()],
           status: MultiSigTransactionStatus.PENDING_SIGNATURES,
         });
-        
+
         await this.multiSigRepo.save(multiSigTx);
-        
+
         if (merchantId) {
-          // Notify relevant signers via webhook
           await this.webhooksService.dispatchEventToMerchant(
-            merchantId, 
-            'transaction.multisig_required', 
+            merchantId,
+            'transaction.multisig_required',
             { transactionId: multiSigTx.id, requiredSignatures: medThreshold, collectedSignatures: myWeight }
           ).catch(e => this.logger.error('Failed to dispatch webhook', e));
         }
-        
+
         return {
           status: 'pending_signatures',
           multiSigTransactionId: multiSigTx.id,
@@ -110,15 +111,61 @@ export class StellarService {
         };
       }
 
-      const response = await this.server.submitTransaction(transaction);
-      
+      const response = await this.getServer().submitTransaction(transaction);
+
       this.logger.log(`Payment successful: ${response.hash}`);
       return {
         hash: response.hash,
         ledger: response.ledger,
       };
 
+    } catch (error: any) {
+      const resultCodes = error.response?.data?.extras?.result_codes;
+      const isInsufficientFee = resultCodes?.transaction === 'tx_insufficient_fee';
+      const canRetry = attemptNumber < 3;
+
+      if ((isInsufficientFee || this.isTimeoutError(error)) && canRetry) {
+        this.logger.warn(
+          { attemptNumber: attemptNumber + 1, destination, error: error.message },
+          'Transaction failed with insufficient fee or timeout, retrying with higher fee',
+        );
+        return this.submitPaymentWithRetry(destination, amount, memo, merchantId, attemptNumber + 1);
+      }
+
+      this.handleStellarError(error);
+    }
+  }
+
+  private isTimeoutError(error: any): boolean {
+    const message = error.message?.toLowerCase() || '';
+    return message.includes('timeout') || message.includes('deadline exceeded');
+  }
+
+  async submitFeeBumpTransaction(innerTransactionXdr: string, feeBump: number): Promise<any> {
+    const maxFee = this.configService.get<number>('STELLAR_MAX_FEE', 1000);
+    if (feeBump > maxFee) {
+      throw new BadRequestException(`Fee bump exceeds maximum fee of ${maxFee} stroops`);
+    }
+
+    try {
+      const innerTx = new StellarSdk.Transaction(innerTransactionXdr, this.networkPassphrase);
+      const feeBumpTx = StellarSdk.TransactionBuilder.buildFeeBumpTransaction(
+        this.sourceKeypair,
+        feeBump.toString(),
+        innerTx,
+        this.networkPassphrase,
+      );
+
+      feeBumpTx.sign(this.sourceKeypair);
+      const response = await this.getServer().submitTransaction(feeBumpTx);
+
+      this.logger.log(`Fee-bump transaction submitted: ${response.hash}`);
+      return {
+        hash: response.hash,
+        ledger: response.ledger,
+      };
     } catch (error) {
+      this.logger.error('Failed to submit fee-bump transaction', error);
       this.handleStellarError(error);
     }
   }
@@ -130,7 +177,7 @@ export class StellarService {
 
     let account: StellarSdk.Horizon.AccountResponse;
     try {
-      account = await this.server.loadAccount(address);
+      account = await this.getServer().loadAccount(address);
     } catch {
       throw new BadRequestException('Stellar payout account does not exist');
     }
@@ -250,7 +297,7 @@ export class StellarService {
       
       transaction.addSignature(hint, signature);
 
-      const sourceAccount = await this.server.loadAccount(multiSigTx.sourceAccount);
+      const sourceAccount = await this.getServer().loadAccount(multiSigTx.sourceAccount);
       const signer = sourceAccount.signers.find(s => s.key === dto.publicKey);
       const weight = signer ? signer.weight : 0;
 
@@ -264,7 +311,7 @@ export class StellarService {
 
       if (multiSigTx.collectedSignatures >= multiSigTx.requiredSignatures) {
         this.logger.log(`Threshold reached for tx ${id}. Submitting...`);
-        const response = await this.server.submitTransaction(transaction);
+        const response = await this.getServer().submitTransaction(transaction);
         multiSigTx.status = MultiSigTransactionStatus.SUBMITTED;
         multiSigTx.transactionHash = response.hash;
         this.logger.log(`Multi-sig transaction submitted successfully: ${response.hash}`);
@@ -376,7 +423,7 @@ export class StellarService {
 
     let account: StellarSdk.Horizon.AccountResponse | undefined;
     try {
-      account = await this.server.loadAccount(this.sourceKeypair.publicKey());
+      account = await this.getServer().loadAccount(this.sourceKeypair.publicKey());
     } catch (error) {
       this.logger.error('Failed to load Stellar account for balances', error);
     }
@@ -401,5 +448,82 @@ export class StellarService {
         balance: balance ? balance.balance : '0',
       };
     });
+  }
+
+  async validateAddress(address: string, assetCode?: string): Promise<{
+    valid: boolean;
+    format: 'g' | 'm' | null;
+    exists: boolean;
+    hasTrustline: boolean;
+    requiresMemo: boolean;
+    error?: string;
+  }> {
+    // Check address format
+    const isValidEd25519 = StellarSdk.StrKey.isValidEd25519PublicKey(address);
+    const isValidMuxed = StellarSdk.StrKey.isValidMuxedAccount(address);
+
+    if (!isValidEd25519 && !isValidMuxed) {
+      return {
+        valid: false,
+        format: null,
+        exists: false,
+        hasTrustline: false,
+        requiresMemo: false,
+        error: 'Invalid Stellar address format',
+      };
+    }
+
+    const format = isValidMuxed ? 'm' : 'g';
+
+    // Check if account exists on network
+    let account: StellarSdk.Horizon.AccountResponse | null = null;
+    const accountAddress = isValidMuxed
+      ? StellarSdk.MuxedAccount.fromAddress(address, '0').accountId()
+      : address;
+
+    try {
+      account = await this.getServer().loadAccount(accountAddress);
+    } catch (error: any) {
+      if (error.status === 404) {
+        return {
+          valid: false,
+          format,
+          exists: false,
+          hasTrustline: false,
+          requiresMemo: false,
+          error: 'Account does not exist on network',
+        };
+      }
+      throw error;
+    }
+
+    // Check trustline if asset is specified
+    let hasTrustline = true;
+    if (assetCode && assetCode.toUpperCase() !== 'XLM') {
+      hasTrustline = account.balances.some(
+        (b: any) => b.asset_code === assetCode.toUpperCase(),
+      );
+    }
+
+    // Check SEP-29 memo requirement
+    let requiresMemo = false;
+    try {
+      const response = await fetch(`${this.configService.get<string>('STELLAR_HORIZON_URL')}/accounts/${accountAddress}`);
+      const data = await response.json();
+      const config = data.data_attr?.config;
+      if (config) {
+        requiresMemo = config.includes('memo_required');
+      }
+    } catch {
+      // Ignore SEP-29 check failure
+    }
+
+    return {
+      valid: true,
+      format,
+      exists: true,
+      hasTrustline,
+      requiresMemo,
+    };
   }
 }
