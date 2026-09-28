@@ -22,6 +22,10 @@ export class MerchantSettings {
   @Column('int', { array: true, default: [-3, 0, 7] })
   reminderOffsets: number[] = [-3, 0, 7];
 
+  /** IANA timezone used for analytics bucketing, e.g. "America/Sao_Paulo". */
+  @Column({ type: 'varchar', length: 64, default: 'UTC' })
+  timezone: string = 'UTC';
+
   @CreateDateColumn()
   createdAt: Date;
 

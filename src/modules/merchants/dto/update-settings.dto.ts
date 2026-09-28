@@ -1,5 +1,5 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { IsOptional, IsBoolean, IsArray, IsInt, Min, Max, ArrayMinSize, ArrayMaxSize } from 'class-validator';
+import { IsOptional, IsBoolean, IsArray, IsInt, Min, Max, ArrayMinSize, ArrayMaxSize, IsTimeZone } from 'class-validator';
 
 export class UpdateSettingsDto {
   @ApiPropertyOptional({ description: 'Enable or disable invoice reminders', default: true })
@@ -20,4 +20,12 @@ export class UpdateSettingsDto {
   @Min(-30, { each: true })
   @Max(30, { each: true })
   reminderOffsets?: number[];
+
+  @ApiPropertyOptional({
+    description: 'IANA timezone used to bucket analytics',
+    example: 'America/Sao_Paulo',
+  })
+  @IsOptional()
+  @IsTimeZone()
+  timezone?: string;
 }

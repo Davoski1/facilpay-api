@@ -250,6 +250,7 @@ export class DisputesService {
         String(payment.amount),
         payment.currency,
         dispute.description,
+        payment.payerLocale,
       ).catch((error) => {
         this.logger.error(
           { error: error.message, disputeId: dispute.id },
@@ -296,6 +297,7 @@ export class DisputesService {
         previousStatus,
         dispute.status,
         dispute.resolutionNotes,
+        payment.payerLocale,
       ).catch((error) => {
         this.logger.error(
           { error: error.message, disputeId: dispute.id },

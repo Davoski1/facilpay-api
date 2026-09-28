@@ -9,10 +9,14 @@ import { EmailLog } from './email-log.entity';
 import { EmailService } from './email.service';
 import { EmailProcessor } from './email.processor';
 import { EmailNotificationService } from './email-notification.service';
+import { EmailSuppression } from './email-suppression.entity';
+import { EmailEventsService } from './email-events/email-events.service';
+import { EmailEventsController } from './email-events/email-events.controller';
+import { AdminEmailSuppressionsController } from './email-events/admin-email-suppressions.controller';
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([EmailLog]),
+    TypeOrmModule.forFeature([EmailLog, EmailSuppression]),
     BullModule.registerQueue({
       name: 'emails',
     }),
@@ -44,7 +48,8 @@ import { EmailNotificationService } from './email-notification.service';
       }),
     }),
   ],
-  providers: [EmailService, EmailProcessor, EmailNotificationService],
-  exports: [EmailService, EmailNotificationService],
+  controllers: [EmailEventsController, AdminEmailSuppressionsController],
+  providers: [EmailService, EmailProcessor, EmailNotificationService, EmailEventsService],
+  exports: [EmailService, EmailNotificationService, EmailEventsService],
 })
 export class NotificationsModule {}

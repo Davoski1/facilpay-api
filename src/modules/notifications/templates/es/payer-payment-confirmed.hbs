@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html>
+<html lang="es">
 <head>
   <meta charset="utf-8">
   <style>
@@ -25,28 +25,28 @@
       {{#if merchantLogo}}
       <img src="{{merchantLogo}}" alt="{{merchantName}}" class="logo">
       {{/if}}
-      <h1>Payment Confirmed</h1>
+      <h1>Pago confirmado</h1>
     </div>
     <div class="body">
-      <p>Hello{{#if payerName}} {{payerName}}{{/if}},</p>
-      <p>Your payment to <strong>{{merchantName}}</strong> has been confirmed successfully.</p>
-      <div class="amount">{{paymentAmount}} {{paymentCurrency}}</div>
+      <p>Hola{{#if payerName}} {{payerName}}{{/if}},</p>
+      <p>Tu pago a <strong>{{merchantName}}</strong> se ha confirmado correctamente.</p>
+      <div class="amount">{{formattedAmount}}</div>
       <dl class="details">
-        <dt>Payment ID</dt>
+        <dt>ID del pago</dt>
         <dd>{{paymentId}}</dd>
-        {{#if paymentDescription}}<dt>Description</dt>
+        {{#if paymentDescription}}<dt>Descripción</dt>
         <dd>{{paymentDescription}}</dd>{{/if}}
-        <dt>Date</dt>
+        <dt>Fecha</dt>
         <dd>{{date}}</dd>
       </dl>
-      <p>Thank you for your payment. If you have any questions, please contact the merchant.</p>
+      <p>Gracias por tu pago. Si tienes alguna pregunta, ponte en contacto con el comercio.</p>
       {{#if supportUrl}}
-      <p>Visit <a href="{{supportUrl}}">{{merchantName}} support</a> for assistance.</p>
+      <p>Visita el <a href="{{supportUrl}}">soporte de {{merchantName}}</a> para obtener ayuda.</p>
       {{/if}}
     </div>
     <div class="footer">
-      <p>&copy; {{year}} {{merchantName}}. All rights reserved.</p>
-      {{#if supportUrl}}<p><a href="{{supportUrl}}">Dashboard</a>{{/if}} | <a href="{{unsubscribeUrl}}">Unsubscribe</a></p>
+      <p>&copy; {{year}} {{merchantName}}. Todos los derechos reservados.</p>
+      {{#if supportUrl}}<p><a href="{{supportUrl}}">Panel</a>{{/if}} | <a href="{{unsubscribeUrl}}">Cancelar suscripción</a></p>
     </div>
   </div>
 </body>

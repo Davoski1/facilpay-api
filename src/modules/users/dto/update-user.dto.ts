@@ -7,7 +7,9 @@ import {
   Matches,
   ValidateIf,
   IsNotEmpty,
+  IsIn,
 } from 'class-validator';
+import { SUPPORTED_LOCALES } from '../../notifications/i18n/locale';
 import { ApiPropertyOptional } from '@nestjs/swagger';
 
 export class UpdateUserDto {
@@ -22,6 +24,15 @@ export class UpdateUserDto {
   @MinLength(1)
   @MaxLength(255)
   name?: string;
+
+  @ApiPropertyOptional({
+    description: 'Preferred language for transactional emails.',
+    enum: SUPPORTED_LOCALES,
+    example: 'fr',
+  })
+  @IsOptional()
+  @IsIn(SUPPORTED_LOCALES)
+  locale?: string;
 
   @ApiPropertyOptional({
     description: 'User email address. Changing email triggers re-verification.',

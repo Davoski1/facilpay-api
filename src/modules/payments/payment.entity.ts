@@ -105,6 +105,10 @@ export class Payment {
   @Column({ nullable: true })
   payerPhone: string | null = null;
 
+  /** Payer's preferred email language, captured from Accept-Language at checkout. */
+  @Column({ type: 'varchar', length: 10, nullable: true })
+  payerLocale: string | null = null;
+
   @Column({ type: 'jsonb', nullable: true })
   metadata: Record<string, string> | null = null;
 

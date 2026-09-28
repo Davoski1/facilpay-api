@@ -22,6 +22,7 @@ import { Observable } from 'rxjs';
 import { SseJwtGuard } from '../auth/guards/sse-jwt.guard';
 import { PaymentSseService } from './payment-sse.service';
 import { MerchantsService } from '../merchants/merchants.service';
+import { resolveLocaleFromAcceptLanguage } from '../notifications/i18n/locale';
 
 import {
   ApiTags,
