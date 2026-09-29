@@ -1,6 +1,7 @@
-import { IsUrl, IsArray, ArrayNotEmpty, IsEnum, ArrayUnique } from 'class-validator';
-import { ApiProperty } from '@nestjs/swagger';
+import { IsUrl, IsArray, ArrayNotEmpty, IsEnum, ArrayUnique, IsOptional, IsString } from 'class-validator';
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { WEBHOOK_EVENT_TYPES, WebhookEventType } from '../entities/webhook-endpoint.entity';
+import { SUPPORTED_API_VERSIONS, CURRENT_API_VERSION } from '../payload-serializers/registry';
 
 export class CreateWebhookEndpointDto {
   @IsUrl({ protocols: ['https'], require_protocol: true }, { message: 'url must be a valid HTTPS URL' })
@@ -24,4 +25,16 @@ export class CreateWebhookEndpointDto {
     example: ['payment.created', 'payment.completed'],
   })
   events: WebhookEventType[];
+
+  @IsOptional()
+  @IsString()
+  @IsEnum(SUPPORTED_API_VERSIONS, {
+    message: `apiVersion must be one of: ${SUPPORTED_API_VERSIONS.join(', ')}`,
+  })
+  @ApiPropertyOptional({
+    description: `API version to use for payload serialisation. Defaults to ${CURRENT_API_VERSION}`,
+    enum: SUPPORTED_API_VERSIONS,
+    example: CURRENT_API_VERSION,
+  })
+  apiVersion?: string;
 }

@@ -68,6 +68,7 @@ export class WebhooksProcessor extends WorkerHost {
             'Content-Type': 'application/json',
             'X-FacilPay-Signature': signature,
             'X-FacilPay-Event': payload.event || 'webhook',
+            'X-FacilPay-Api-Version': endpoint.apiVersion || '2026-09-01',
           },
         }),
       );

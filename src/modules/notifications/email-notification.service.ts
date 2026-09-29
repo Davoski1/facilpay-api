@@ -8,6 +8,10 @@ import { SendEmailJobData } from './email.processor';
 import type { ReportSummary } from '../reports/reports.service';
 import { formatDate, formatMoney } from './i18n/locale';
 import { translate } from './i18n/messages';
+import { NotificationPreferencesService } from './notification-preferences.service';
+import { NotificationCategory } from './notification-preference.entity';
+import { InAppNotificationsService } from './in-app-notifications.service';
+import { InAppNotificationType } from './in-app-notification.entity';
 
 @Injectable()
 export class EmailNotificationService {
@@ -15,6 +19,8 @@ export class EmailNotificationService {
 
   constructor(
     @InjectQueue('emails') private readonly emailQueue: Queue,
+    private readonly prefsService: NotificationPreferencesService,
+    private readonly inAppNotificationsService: InAppNotificationsService,
     appLogger: AppLogger,
   ) {
     this.logger = appLogger.child({ module: EmailNotificationService.name });
@@ -27,7 +33,11 @@ export class EmailNotificationService {
     amount: string,
     currency: string,
     description: string | null,
+    merchantId?: string,
   ): Promise<void> {
+    if (merchantId && !(await this.prefsService.isEmailEnabled(merchantId, NotificationCategory.PAYMENTS))) {
+      return;
+    }
     await this.enqueue({
       to,
       subject: `Payment Received: ${amount} ${currency}`,
@@ -43,6 +53,15 @@ export class EmailNotificationService {
       recipientRole: 'merchant',
       paymentId,
     });
+    if (merchantId) {
+      await this.inAppNotificationsService.create({
+        userId: merchantId,
+        type: InAppNotificationType.PAYMENT_RECEIVED,
+        title: `Payment Received: ${amount} ${currency}`,
+        body: description ? `Payment ${paymentId} — ${description}` : `Payment ${paymentId} received`,
+        link: `/payments/${paymentId}`,
+      });
+    }
   }
 
   async sendMerchantRefundIssued(
@@ -54,7 +73,11 @@ export class EmailNotificationService {
     paymentAmount: string,
     currency: string,
     reason: string | null,
+    merchantId?: string,
   ): Promise<void> {
+    if (merchantId && !(await this.prefsService.isEmailEnabled(merchantId, NotificationCategory.REFUNDS))) {
+      return;
+    }
     await this.enqueue({
       to,
       subject: `Refund Issued: ${refundAmount} ${currency}`,
@@ -73,6 +96,15 @@ export class EmailNotificationService {
       paymentId,
       refundId,
     });
+    if (merchantId) {
+      await this.inAppNotificationsService.create({
+        userId: merchantId,
+        type: InAppNotificationType.REFUND_ISSUED,
+        title: `Refund Issued: ${refundAmount} ${currency}`,
+        body: reason ? `Refund ${refundId} for payment ${paymentId} — ${reason}` : `Refund ${refundId} issued for payment ${paymentId}`,
+        link: `/payments/${paymentId}`,
+      });
+    }
   }
 
   async sendMerchantDisputeOpened(
@@ -83,7 +115,11 @@ export class EmailNotificationService {
     amount: string,
     currency: string,
     reason: string | null,
+    merchantId?: string,
   ): Promise<void> {
+    if (merchantId && !(await this.prefsService.isEmailEnabled(merchantId, NotificationCategory.DISPUTES))) {
+      return;
+    }
     await this.enqueue({
       to,
       subject: `Dispute Opened: ${amount} ${currency}`,
@@ -100,6 +136,15 @@ export class EmailNotificationService {
       recipientRole: 'merchant',
       paymentId,
     });
+    if (merchantId) {
+      await this.inAppNotificationsService.create({
+        userId: merchantId,
+        type: InAppNotificationType.DISPUTE_OPENED,
+        title: `Dispute Opened: ${amount} ${currency}`,
+        body: reason ? `Dispute ${disputeId} on payment ${paymentId} — ${reason}` : `Dispute ${disputeId} opened on payment ${paymentId}`,
+        link: `/payments/${paymentId}/disputes/${disputeId}`,
+      });
+    }
   }
 
   async sendDisputeResponseReminder(
@@ -375,7 +420,11 @@ export class EmailNotificationService {
     summary: ReportSummary,
     subscriptionId: string,
     csvContent?: string,
+    merchantId?: string,
   ): Promise<void> {
+    if (merchantId && !(await this.prefsService.isEmailEnabled(merchantId, NotificationCategory.REPORTS))) {
+      return;
+    }
     const periodLabel = summary.periodStart.toLocaleDateString('en-US', {
       year: 'numeric',
       month: 'long',

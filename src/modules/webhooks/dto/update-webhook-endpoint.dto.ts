@@ -1,6 +1,7 @@
-import { IsUrl, IsArray, ArrayNotEmpty, IsEnum, ArrayUnique, IsOptional, IsBoolean } from 'class-validator';
+import { IsUrl, IsArray, ArrayNotEmpty, IsEnum, ArrayUnique, IsOptional, IsBoolean, IsString } from 'class-validator';
 import { ApiPropertyOptional } from '@nestjs/swagger';
 import { WEBHOOK_EVENT_TYPES, WebhookEventType } from '../entities/webhook-endpoint.entity';
+import { SUPPORTED_API_VERSIONS, CURRENT_API_VERSION } from '../payload-serializers/registry';
 
 export class UpdateWebhookEndpointDto {
   @IsOptional()
@@ -34,4 +35,16 @@ export class UpdateWebhookEndpointDto {
     example: false,
   })
   isActive?: boolean;
+
+  @IsOptional()
+  @IsString()
+  @IsEnum(SUPPORTED_API_VERSIONS, {
+    message: `apiVersion must be one of: ${SUPPORTED_API_VERSIONS.join(', ')}`,
+  })
+  @ApiPropertyOptional({
+    description: `Upgrade the endpoint to a different payload version. Supported: ${SUPPORTED_API_VERSIONS.join(', ')}`,
+    enum: SUPPORTED_API_VERSIONS,
+    example: '2026-10-01',
+  })
+  apiVersion?: string;
 }
