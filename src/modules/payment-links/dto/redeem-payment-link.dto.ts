@@ -9,9 +9,12 @@ import {
   ValidateNested,
   IsBoolean,
   IsEnum,
+  MaxLength,
+  Matches,
+  ValidateIf,
 } from 'class-validator';
 import { ApiPropertyOptional, ApiProperty } from '@nestjs/swagger';
-import { Type, ValidateIf } from 'class-transformer';
+import { Type } from 'class-transformer';
 
 export class CustomFieldValueDto {
   @IsString()
@@ -24,6 +27,13 @@ export class CustomFieldValueDto {
 }
 
 export class RedeemPaymentLinkDto {
+  @IsString()
+  @MaxLength(64)
+  @Matches(/^[A-Za-z0-9_-]{2,64}$/)
+  @IsOptional()
+  @ApiPropertyOptional({ example: 'SPRING25' })
+  couponCode?: string;
+
   @IsNumber()
   @IsOptional()
   @IsPositive()

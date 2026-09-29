@@ -1,6 +1,8 @@
 import { Injectable, NotFoundException, ConflictException, BadRequestException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { DataSource, Repository } from 'typeorm';
+import { DataSource, In, LessThanOrEqual, Repository } from 'typeorm';
+import { Cron, CronExpression } from '@nestjs/schedule';
+import { ConfigService } from '@nestjs/config';
 import { Dispute, DisputeStatus, DisputeReason } from './dispute.entity';
 import { Payment, PaymentStatus } from './payment.entity';
 import { CreateDisputeDto } from './dto/create-dispute.dto';
@@ -23,6 +25,7 @@ export class DisputesService {
     appLogger: AppLogger,
     private readonly emailNotificationService: EmailNotificationService,
     private readonly webhooksService: WebhooksService,
+    private readonly configService: ConfigService,
   ) {
     this.logger = appLogger.child({ module: DisputesService.name });
   }
@@ -69,6 +72,11 @@ export class DisputesService {
       const disputedAmount = createDisputeDto.description
         ? Number(payment.amount) - Number(payment.refundedAmount || 0)
         : null;
+      const createdAt = new Date();
+      const responseDays = Math.max(
+        1,
+        Number(this.configService.get('DISPUTE_RESPONSE_DAYS', 7)) || 7,
+      );
 
       const dispute = queryRunner.manager.create(Dispute, {
         paymentId,
@@ -79,6 +87,8 @@ export class DisputesService {
         openedBy: openedBy || createDisputeDto.openedBy,
         merchantEmail: payment.merchantEmail,
         payerEmail: payment.payerEmail,
+        createdAt,
+        respondBy: new Date(createdAt.getTime() + responseDays * 24 * 60 * 60 * 1000),
       });
 
       const savedDispute = await queryRunner.manager.save(dispute);
@@ -161,6 +171,8 @@ export class DisputesService {
           dispute.resolvedBy = resolvedBy || updateDisputeDto.resolvedBy;
         } else if (updateDisputeDto.status === DisputeStatus.CLOSED) {
           dispute.closedAt = new Date();
+        } else if (updateDisputeDto.status === DisputeStatus.ESCALATED) {
+          dispute.escalatedAt = new Date();
         }
       }
 
@@ -206,8 +218,9 @@ export class DisputesService {
 
   private validateStatusTransition(currentStatus: DisputeStatus, newStatus: DisputeStatus): void {
     const validTransitions: Record<DisputeStatus, DisputeStatus[]> = {
-      [DisputeStatus.OPEN]: [DisputeStatus.UNDER_REVIEW, DisputeStatus.CLOSED],
-      [DisputeStatus.UNDER_REVIEW]: [DisputeStatus.RESOLVED, DisputeStatus.CLOSED],
+      [DisputeStatus.OPEN]: [DisputeStatus.UNDER_REVIEW, DisputeStatus.CLOSED, DisputeStatus.ESCALATED],
+      [DisputeStatus.UNDER_REVIEW]: [DisputeStatus.RESOLVED, DisputeStatus.CLOSED, DisputeStatus.ESCALATED],
+      [DisputeStatus.ESCALATED]: [DisputeStatus.UNDER_REVIEW, DisputeStatus.RESOLVED, DisputeStatus.CLOSED],
       [DisputeStatus.RESOLVED]: [DisputeStatus.CLOSED],
       [DisputeStatus.CLOSED]: [],
     };
@@ -218,6 +231,94 @@ export class DisputesService {
       throw new ConflictException(
         `Invalid status transition from ${currentStatus} to ${newStatus}`,
       );
+    }
+  }
+
+  @Cron(CronExpression.EVERY_DAY_AT_MIDNIGHT)
+  async processResponseDeadlines(): Promise<void> {
+    const now = new Date();
+    const threeDaysFromNow = new Date(now.getTime() + 3 * 24 * 60 * 60 * 1000);
+    const activeStatuses = [DisputeStatus.OPEN, DisputeStatus.UNDER_REVIEW];
+    const disputes = await this.disputeRepository.find({
+      where: {
+        status: In(activeStatuses),
+        respondBy: LessThanOrEqual(threeDaysFromNow),
+      },
+    });
+
+    for (const dispute of disputes) {
+      const timeRemaining = dispute.respondBy.getTime() - now.getTime();
+      if (timeRemaining <= 0) {
+        await this.escalateIfOverdue(dispute, now);
+        continue;
+      }
+      if (!dispute.merchantEmail) continue;
+
+      const daysRemaining = timeRemaining <= 24 * 60 * 60 * 1000 ? 1 : 3;
+      const reminderField = daysRemaining === 1
+        ? 'reminder1DaySentAt'
+        : 'reminder3DaySentAt';
+      if (!(await this.markReminderSent(dispute.id, reminderField, now))) continue;
+      await this.emailNotificationService.sendDisputeResponseReminder(
+        dispute.merchantEmail,
+        { disputeId: dispute.id, paymentId: dispute.paymentId, respondBy: dispute.respondBy, daysRemaining },
+      ).catch((error) => this.logger.error(
+        { error: error.message, disputeId: dispute.id },
+        'Failed to send dispute response deadline reminder',
+      ));
+    }
+  }
+
+  private async markReminderSent(
+    disputeId: string,
+    field: 'reminder3DaySentAt' | 'reminder1DaySentAt',
+    sentAt: Date,
+  ): Promise<boolean> {
+    const result = await this.disputeRepository
+      .createQueryBuilder()
+      .update(Dispute)
+      .set({ [field]: sentAt })
+      .where('id = :disputeId', { disputeId })
+      .andWhere(`"${field}" IS NULL`)
+      .andWhere('status IN (:...statuses)', {
+        statuses: [DisputeStatus.OPEN, DisputeStatus.UNDER_REVIEW],
+      })
+      .execute();
+    return result.affected === 1;
+  }
+
+  private async escalateIfOverdue(dispute: Dispute, now: Date): Promise<void> {
+    const result = await this.disputeRepository
+      .createQueryBuilder()
+      .update(Dispute)
+      .set({ status: DisputeStatus.ESCALATED, escalatedAt: now })
+      .where('id = :disputeId', { disputeId: dispute.id })
+      .andWhere('status IN (:...statuses)', {
+        statuses: [DisputeStatus.OPEN, DisputeStatus.UNDER_REVIEW],
+      })
+      .andWhere('"respondBy" <= :now', { now })
+      .execute();
+    if (result.affected !== 1) return;
+
+    const previousStatus = dispute.status;
+    dispute.status = DisputeStatus.ESCALATED;
+    dispute.escalatedAt = now;
+    await this.sendDisputeStatusNotification(dispute, previousStatus);
+    await this.dispatchDisputeWebhook(dispute, 'dispute.updated');
+
+    const adminEmails = (this.configService.get<string>(
+      'DISPUTE_ADMIN_EMAILS',
+      this.configService.get<string>('ADMIN_EMAIL', ''),
+    ) ?? '').split(',').map((email) => email.trim()).filter(Boolean);
+    for (const email of adminEmails) {
+      await this.emailNotificationService.sendDisputeEscalatedNotice(email, {
+        disputeId: dispute.id,
+        paymentId: dispute.paymentId,
+        respondBy: dispute.respondBy,
+      }).catch((error) => this.logger.error(
+        { error: error.message, disputeId: dispute.id, email },
+        'Failed to send dispute escalation notification',
+      ));
     }
   }
 

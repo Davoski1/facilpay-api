@@ -15,6 +15,29 @@ export interface InvoiceData {
   };
 }
 
+export interface StandaloneInvoiceData {
+  invoice: {
+    number: number;
+    status: string;
+    customerName: string | null;
+    customerEmail: string;
+    currency: string;
+    subtotal: string | number;
+    taxRate: string | number;
+    taxAmount: string | number;
+    total: string | number;
+    dueDate: Date;
+    createdAt: Date;
+    lineItems: Array<{
+      description: string;
+      quantity: string | number;
+      unitPrice: string | number;
+      amount: string | number;
+    }>;
+  };
+  branding?: InvoiceData['branding'];
+}
+
 // Default FacilPay branding
 const DEFAULT_BRANDING = {
   displayName: 'FacilPay',
@@ -315,6 +338,73 @@ export function generateInvoicePdf(data: InvoiceData): PDFKitType.PDFDocument {
       { width: contentWidth, align: 'center' },
     );
 
+  doc.end();
+  return doc;
+}
+
+export function generateStandaloneInvoicePdf(
+  data: StandaloneInvoiceData,
+): PDFKitType.PDFDocument {
+  const { invoice } = data;
+  const brand = { ...DEFAULT_BRANDING, ...data.branding };
+  const doc = new PDFDocument({ size: 'A4', margin: 50 });
+  const left = doc.page.margins.left;
+  const right = doc.page.width - doc.page.margins.right;
+  const width = right - left;
+  const invoiceNumber = `INV-${String(invoice.number).padStart(6, '0')}`;
+
+  doc.font('Helvetica-Bold').fontSize(24).fillColor(brand.primaryColor).text(brand.displayName, left, 50);
+  doc.font('Helvetica').fontSize(10).fillColor('#666666').text('Invoice', left, 80);
+  doc.font('Helvetica-Bold').fontSize(10).fillColor(brand.primaryColor)
+    .text(invoiceNumber, right - 160, 50, { width: 160, align: 'right' });
+  doc.font('Helvetica').fontSize(9).fillColor('#333333')
+    .text(`Status: ${invoice.status}`, right - 160, 66, { width: 160, align: 'right' })
+    .text(`Issued: ${invoice.createdAt.toUTCString()}`, right - 160, 80, { width: 160, align: 'right' })
+    .text(`Due: ${invoice.dueDate.toUTCString()}`, right - 160, 94, { width: 160, align: 'right' });
+  drawHRule(doc, 120);
+
+  let y = 138;
+  doc.font('Helvetica-Bold').fontSize(11).fillColor(brand.primaryColor).text('Bill To', left, y);
+  y += 18;
+  doc.font('Helvetica').fontSize(9).fillColor('#111111')
+    .text(invoice.customerName || invoice.customerEmail, left, y, { width });
+  if (invoice.customerName) {
+    y += 14;
+    doc.text(invoice.customerEmail, left, y, { width });
+  }
+
+  y += 32;
+  doc.font('Helvetica-Bold').fontSize(9).fillColor('#555555');
+  doc.text('Description', left, y, { width: width * 0.48 });
+  doc.text('Qty', left + width * 0.5, y, { width: width * 0.12, align: 'right' });
+  doc.text('Unit price', left + width * 0.64, y, { width: width * 0.17, align: 'right' });
+  doc.text('Amount', left + width * 0.83, y, { width: width * 0.17, align: 'right' });
+  y += 16;
+  drawHRule(doc, y);
+  y += 10;
+  for (const item of invoice.lineItems) {
+    doc.font('Helvetica').fontSize(9).fillColor('#111111');
+    doc.text(item.description, left, y, { width: width * 0.48 });
+    doc.text(String(item.quantity), left + width * 0.5, y, { width: width * 0.12, align: 'right' });
+    doc.text(`${Number(item.unitPrice).toFixed(2)} ${invoice.currency}`, left + width * 0.64, y, { width: width * 0.17, align: 'right' });
+    doc.text(`${Number(item.amount).toFixed(2)} ${invoice.currency}`, left + width * 0.83, y, { width: width * 0.17, align: 'right' });
+    y += 20;
+  }
+
+  y += 6;
+  drawHRule(doc, y);
+  y += 12;
+  labelRow(doc, 'Subtotal', `${Number(invoice.subtotal).toFixed(2)} ${invoice.currency}`, y);
+  y += 18;
+  labelRow(doc, `Tax (${Number(invoice.taxRate).toFixed(2)}%)`, `${Number(invoice.taxAmount).toFixed(2)} ${invoice.currency}`, y);
+  y += 20;
+  doc.font('Helvetica-Bold').fontSize(11).fillColor(brand.primaryColor)
+    .text(`Total: ${Number(invoice.total).toFixed(2)} ${invoice.currency}`, left, y, { width, align: 'right' });
+
+  const footerY = doc.page.height - doc.page.margins.bottom - 30;
+  drawHRule(doc, footerY);
+  doc.font('Helvetica').fontSize(8).fillColor('#888888')
+    .text(brand.displayName, left, footerY + 10, { width, align: 'center' });
   doc.end();
   return doc;
 }

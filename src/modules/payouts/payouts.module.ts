@@ -13,6 +13,7 @@ import { AuditLogsModule } from '../audit-logs/audit-logs.module';
 import { PAYOUTS_QUEUE, PayoutsService } from './payouts.service';
 import { PayoutsProcessor } from './payouts.processor';
 import { AdminPayoutsController, PayoutsController } from './payouts.controller';
+import { UsersModule } from '../users/users.module';
 
 @Module({
   imports: [
@@ -25,6 +26,7 @@ import { AdminPayoutsController, PayoutsController } from './payouts.controller'
     WebhooksModule,
     EventsModule,
     AuditLogsModule,
+    UsersModule,
   ],
   controllers: [PayoutsController, AdminPayoutsController],
   providers: [PayoutsService, PayoutsProcessor],

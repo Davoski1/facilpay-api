@@ -51,6 +51,58 @@ export class MailService {
     });
   }
 
+  async sendMerchantStatusEmail(
+    to: string,
+    status: 'SUSPENDED' | 'ACTIVE',
+    reason?: string | null,
+  ): Promise<void> {
+    const suspended = status === 'SUSPENDED';
+    const subject = suspended
+      ? 'Your FacilPay merchant account has been suspended'
+      : 'Your FacilPay merchant account has been reinstated';
+    const statusMessage = suspended
+      ? `Your merchant account has been suspended.${reason ? ` Reason: ${reason}` : ''} New transactions and payouts are disabled while the suspension is active.`
+      : 'Your merchant account has been reinstated. You can resume using FacilPay services.';
+    const htmlMessage = statusMessage.replace(/[&<>"']/g, (character) => ({
+      '&': '&amp;',
+      '<': '&lt;',
+      '>': '&gt;',
+      '"': '&quot;',
+      "'": '&#39;',
+    })[character] as string);
+    await this.transporter.sendMail({
+      from: this.configService.get<string>(
+        'SMTP_FROM',
+        '"FacilPay" <noreply@facilpay.com>',
+      ),
+      to,
+      subject,
+      text: statusMessage,
+      html: `<p>${htmlMessage}</p>`,
+    });
+  }
+
+  async sendLowStellarBalanceAlert(
+    to: string,
+    assetCode: string,
+    balance: string,
+    threshold: number,
+    accountAddress: string,
+  ): Promise<void> {
+    const subject = `FacilPay Stellar balance low: ${assetCode}`;
+    const text = `The platform Stellar distribution account ${accountAddress} has ${balance} ${assetCode}, below the configured threshold of ${threshold} ${assetCode}.`;
+    await this.transporter.sendMail({
+      from: this.configService.get<string>(
+        'SMTP_FROM',
+        '"FacilPay" <noreply@facilpay.com>',
+      ),
+      to,
+      subject,
+      text,
+      html: `<p>${text}</p>`,
+    });
+  }
+
   async sendSettlementNotification(
     to: string,
     settlement: Settlement,

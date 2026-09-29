@@ -234,6 +234,12 @@ export class CreatePaymentDto {
   })
   dueDate?: string;
 
+  @IsString()
+  @IsOptional()
+  @MaxLength(64)
+  @ApiPropertyOptional({ description: 'Coupon code applied to a payment-link checkout', example: 'SPRING25' })
+  couponCode?: string;
+
   @IsOptional()
   @IsBoolean({ message: 'remindersEnabled must be a boolean' })
   @ApiPropertyOptional({

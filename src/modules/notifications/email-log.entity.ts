@@ -13,7 +13,10 @@ export enum EmailEventType {
   REFUND_PROCESSED = 'refund_processed',
   DISPUTE_OPENED = 'dispute_opened',
   DISPUTE_STATUS_CHANGED = 'dispute_status_changed',
-  API_KEY_EXPIRING = 'api_key_expiring',
+  INVOICE_CREATED = 'invoice_created',
+  DISPUTE_DEADLINE_REMINDER = 'dispute_deadline_reminder',
+  DISPUTE_ESCALATED = 'dispute_escalated',
+  DISPUTE_RESPONSE_REMINDER = 'dispute_response_reminder',
 }
 
 export enum EmailLogStatus {

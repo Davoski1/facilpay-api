@@ -36,4 +36,13 @@ export class RefundPaymentDto {
     maxLength: 500,
   })
   reason?: string;
+
+  @IsString()
+  @IsOptional()
+  @MaxLength(56)
+  @ApiPropertyOptional({
+    description: 'Optional Stellar address to receive the refund asset',
+    example: 'GABC1234567890STELLARADDRESSEXAMPLE',
+  })
+  stellarDestination?: string;
 }

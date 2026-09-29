@@ -29,7 +29,8 @@ import { EventsModule } from './modules/events/events.module';
 import { ReportsModule } from './modules/reports/reports.module';
 import { PayoutsModule } from './modules/payouts/payouts.module';
 import { AnalyticsModule } from './modules/analytics/analytics.module';
-import { AdminModule } from './modules/admin/admin.module';
+import { InvoicesModule } from './modules/invoices/invoices.module';
+import { CouponsModule } from './modules/coupons/coupons.module';
 
 @Module({
   imports: [
@@ -65,7 +66,8 @@ import { AdminModule } from './modules/admin/admin.module';
     ReportsModule,
     PayoutsModule,
     AnalyticsModule,
-    AdminModule,
+    InvoicesModule,
+    CouponsModule,
   ],
   controllers: [AppController],
   providers: [AppService],

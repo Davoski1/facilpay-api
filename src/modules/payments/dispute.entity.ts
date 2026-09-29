@@ -6,12 +6,14 @@ import {
   UpdateDateColumn,
   ManyToOne,
   JoinColumn,
+  Index,
 } from 'typeorm';
 import { Payment } from './payment.entity';
 
 export enum DisputeStatus {
   OPEN = 'open',
   UNDER_REVIEW = 'under_review',
+  ESCALATED = 'escalated',
   RESOLVED = 'resolved',
   CLOSED = 'closed',
 }
@@ -26,6 +28,7 @@ export enum DisputeReason {
 }
 
 @Entity('disputes')
+@Index('IDX_disputes_status_respondBy', ['status', 'respondBy'])
 export class Dispute {
   @PrimaryGeneratedColumn('uuid')
   id: string;
@@ -82,4 +85,16 @@ export class Dispute {
 
   @Column({ nullable: true })
   closedAt: Date | null;
+
+  @Column({ type: 'timestamptz' })
+  respondBy: Date;
+
+  @Column({ type: 'timestamptz', nullable: true })
+  reminder3DaySentAt: Date | null;
+
+  @Column({ type: 'timestamptz', nullable: true })
+  reminder1DaySentAt: Date | null;
+
+  @Column({ type: 'timestamptz', nullable: true })
+  escalatedAt: Date | null;
 }

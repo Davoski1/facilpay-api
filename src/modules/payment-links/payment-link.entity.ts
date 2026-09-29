@@ -47,6 +47,10 @@ export class PaymentLink {
   @Column({ length: 64, nullable: true })
   slug: string | null = null;
 
+  @Index({ unique: true })
+  @Column({ length: 64, nullable: true })
+  slug: string | null = null;
+
   @Column({ type: 'decimal', precision: 10, scale: 2, nullable: true })
   amount: number | null;
 
@@ -76,6 +80,18 @@ export class PaymentLink {
 
   @Column({ type: 'integer', nullable: true })
   maxCompletions: number | null = null;
+
+  @Column({ type: 'jsonb', default: () => "'{}'::jsonb" })
+  requiredFields: PaymentLinkRequiredFields;
+
+  @Column({ type: 'jsonb', default: () => "'[]'::jsonb" })
+  customFields: CustomField[];
+
+  @Column({ type: 'varchar', length: 2048, nullable: true })
+  successUrl: string | null = null;
+
+  @Column({ type: 'varchar', length: 2048, nullable: true })
+  cancelUrl: string | null = null;
 
   @Column()
   merchantId: string;

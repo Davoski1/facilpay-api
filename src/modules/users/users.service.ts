@@ -117,6 +117,34 @@ export class UsersService {
     return result;
   }
 
+  async assertMerchantActive(id: string): Promise<void> {
+    const user = await this.findOne(id);
+    if (user.status === 'SUSPENDED') {
+      throw new ForbiddenException(
+        'Merchant is suspended and cannot perform transactions',
+      );
+    }
+  }
+
+  async setMerchantStatus(
+    id: string,
+    status: 'ACTIVE' | 'SUSPENDED',
+    reason: string | null,
+  ): Promise<Omit<User, 'password'>> {
+    const user = await this.userRepository.findOne({
+      where: { id, deletedAt: null },
+    });
+    if (!user) {
+      throw new NotFoundException(`User with ID ${id} not found`);
+    }
+    user.status = status;
+    user.suspendedReason = status === 'SUSPENDED' ? reason : null;
+    user.suspendedAt = status === 'SUSPENDED' ? new Date() : null;
+    const saved = await this.userRepository.save(user);
+    const { password, ...result } = saved;
+    return result;
+  }
+
   /**
    * Find a user by ID with authorization check.
    * Users can only view their own profile unless they are an admin.

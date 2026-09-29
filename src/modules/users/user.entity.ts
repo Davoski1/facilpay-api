@@ -18,7 +18,7 @@ export class User {
   @Column()
   password: string;
 
-  @Column({ nullable: true })
+  @Column({ type: 'varchar', nullable: true })
   name: string | null = null;
 
   /** Preferred language for transactional emails (en, fr, es, pt). */
@@ -36,6 +36,15 @@ export class User {
 
   @Column({ default: true })
   isActive: boolean = true;
+
+  @Column({ type: 'varchar', length: 16, default: 'ACTIVE' })
+  status: 'ACTIVE' | 'SUSPENDED' = 'ACTIVE';
+
+  @Column({ type: 'text', nullable: true })
+  suspendedReason: string | null = null;
+
+  @Column({ type: 'timestamptz', nullable: true })
+  suspendedAt: Date | null = null;
 
   @Column({ nullable: true })
   twoFactorSecret: string | null = null;

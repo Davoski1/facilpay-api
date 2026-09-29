@@ -58,7 +58,7 @@ import { Session } from './entities/session.entity';
     }),
   ],
   controllers: [AuthController],
-  providers: [AuthService, JwtStrategy, JwtAuthGuard, RolesGuard, PermissionsGuard, MailService, PasswordStrengthService, PasswordHistoryService, WebAuthnService, LoginAlertsService],
-  exports: [AuthService, JwtAuthGuard, RolesGuard, PermissionsGuard, PasswordStrengthService, PasswordHistoryService],
+  providers: [AuthService, JwtStrategy, JwtAuthGuard, RolesGuard, PermissionsGuard, MailService, PasswordStrengthService, PasswordHistoryService],
+  exports: [AuthService, MailService, JwtAuthGuard, RolesGuard, PermissionsGuard, PasswordStrengthService, PasswordHistoryService],
 })
 export class AuthModule {}

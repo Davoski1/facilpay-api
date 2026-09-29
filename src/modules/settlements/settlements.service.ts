@@ -572,6 +572,13 @@ export class SettlementsService {
         return null;
       }
 
+      const merchant = await this.usersService.findOne(lockedConfig.userId);
+      if (merchant.status === 'SUSPENDED') {
+        await queryRunner.rollbackTransaction();
+        this.logger.warn(`Skipping settlement for suspended merchant ${lockedConfig.userId}`);
+        return null;
+      }
+
       if (!lockedConfig.destinationId) {
         throw new BadRequestException('A verified payout destination is required for settlement');
       }

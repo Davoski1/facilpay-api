@@ -483,4 +483,51 @@ describe('UsersService', () => {
       expect(userRepository.save).toHaveBeenCalled();
     });
   });
+  describe('merchant suspension', () => {
+    it('rejects activity while a merchant is suspended', async () => {
+      userRepository.findOne.mockResolvedValue({
+        id: 'merchant-1',
+        email: 'merchant@example.com',
+        status: 'SUSPENDED',
+      });
+
+      await expect(service.assertMerchantActive('merchant-1')).rejects.toThrow(
+        ForbiddenException,
+      );
+    });
+
+    it('allows activity while a merchant is active', async () => {
+      userRepository.findOne.mockResolvedValue({
+        id: 'merchant-1',
+        email: 'merchant@example.com',
+        status: 'ACTIVE',
+      });
+
+      await expect(service.assertMerchantActive('merchant-1')).resolves.toBeUndefined();
+    });
+
+    it('sets suspension metadata and clears it on reinstatement', async () => {
+      const merchant = new User({
+        id: 'merchant-1',
+        email: 'merchant@example.com',
+        status: 'ACTIVE',
+      });
+      userRepository.findOne.mockResolvedValue(merchant);
+      userRepository.save.mockImplementation(async (saved: User) => saved);
+
+      const suspended = await service.setMerchantStatus(
+        'merchant-1',
+        'SUSPENDED',
+        'fraud review',
+      );
+      expect(suspended.status).toBe('SUSPENDED');
+      expect(suspended.suspendedReason).toBe('fraud review');
+      expect(suspended.suspendedAt).toBeInstanceOf(Date);
+
+      const reinstated = await service.setMerchantStatus('merchant-1', 'ACTIVE', null);
+      expect(reinstated.status).toBe('ACTIVE');
+      expect(reinstated.suspendedReason).toBeNull();
+      expect(reinstated.suspendedAt).toBeNull();
+    });
+  });
 });

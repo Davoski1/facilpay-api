@@ -97,7 +97,7 @@ describe('SettlementsService', () => {
         {
           provide: UsersService,
           useValue: {
-            findOne: jest.fn().mockResolvedValue({ email: 'merchant@test.com' }),
+            findOne: jest.fn().mockResolvedValue({ email: 'merchant@test.com', status: 'ACTIVE' }),
           },
         },
         {
@@ -270,7 +270,7 @@ describe('SettlementsService', () => {
         {
           provide: UsersService,
           useValue: {
-            findOne: jest.fn().mockResolvedValue({ email: 'merchant@test.com' }),
+            findOne: jest.fn().mockResolvedValue({ email: 'merchant@test.com', status: 'ACTIVE' }),
           },
         },
         {
