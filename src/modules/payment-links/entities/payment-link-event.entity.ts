@@ -7,7 +7,7 @@ import {
   ManyToOne,
   JoinColumn,
 } from 'typeorm';
-import { PaymentLink } from './payment-link.entity';
+import { PaymentLink } from '../payment-link.entity';
 
 export enum PaymentLinkEventType {
   VIEW = 'VIEW',

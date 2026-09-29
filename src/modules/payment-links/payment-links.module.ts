@@ -6,10 +6,12 @@ import { PaymentLink } from './payment-link.entity';
 import { PaymentLinkEvent } from './entities/payment-link-event.entity';
 import { PaymentLinksService } from './payment-links.service';
 import { PaymentLinksController } from './payment-links.controller';
+import { CouponsModule } from '../coupons/coupons.module';
 
 @Module({
   imports: [
     ConfigModule,
+    CouponsModule,
     LoggerModule,
     TypeOrmModule.forFeature([PaymentLink, PaymentLinkEvent]),
   ],

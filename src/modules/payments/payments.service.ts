@@ -16,6 +16,10 @@ import {
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { ConfigService } from '@nestjs/config';
 import { Payment, PaymentStatus } from './payment.entity';
+import { Invoice, InvoiceStatus } from '../invoices/invoice.entity';
+import { Coupon } from '../coupons/coupon.entity';
+import { PaymentLink } from '../payment-links/payment-link.entity';
+import { assertCouponUsable, calculateCouponDiscount } from '../coupons/coupons.service';
 import { Refund, RefundReasonCode } from './refund.entity';
 import { Dispute, DisputeStatus } from './dispute.entity';
 import { PaymentSplit, PaymentSplitStatus } from './payment-split.entity';
@@ -38,10 +42,13 @@ import { PaymentSseService } from './payment-sse.service';
 import { EmailNotificationService } from '../notifications/email-notification.service';
 import { normalizeLocale } from '../notifications/i18n/locale';
 import { WebhooksService } from '../webhooks/webhooks.service';
+import { PaymentLinksService } from '../payment-links/payment-links.service';
 import { StellarService } from '../stellar/stellar.service';
 import { UsersService } from '../users/users.service';
 import { SettlementAdjustment } from '../settlements/entities/settlement-adjustment.entity';
 import { EventsService } from '../events/events.service';
+import { Customer } from '../customers/customer.entity';
+import { resolveCustomerForMerchant } from '../customers/customer-ownership';
 
 const DEFAULT_PAYMENT_EXPIRY_SECONDS = 1800;
 const DEFAULT_MAX_REFUNDS_PER_PAYMENT = 20;
@@ -258,6 +265,8 @@ export class PaymentsService {
   async create(
     createPaymentDto: CreatePaymentDto,
     recurringPaymentId?: string,
+    invoiceId?: string,
+    authenticatedMerchantId?: string,
   ): Promise<Payment> {
     const queryRunner = this.dataSource.createQueryRunner();
 
@@ -265,10 +274,73 @@ export class PaymentsService {
       await queryRunner.connect();
       await queryRunner.startTransaction();
 
+      let invoice: Invoice | null = null;
+      if (invoiceId) {
+        invoice = await queryRunner.manager.findOne(Invoice, {
+          where: { id: invoiceId },
+          lock: { mode: 'pessimistic_write' },
+        });
+        if (!invoice || ![InvoiceStatus.OPEN, InvoiceStatus.OVERDUE].includes(invoice.status)) {
+          throw new ConflictException('Invoice is not payable');
+        }
+        if (invoice.paymentId) {
+          const previousPayment = await queryRunner.manager.findOne(Payment, {
+            where: { id: invoice.paymentId },
+          });
+          if (
+            previousPayment &&
+            ![PaymentStatus.FAILED, PaymentStatus.CANCELLED, PaymentStatus.EXPIRED].includes(previousPayment.status)
+          ) {
+            throw new ConflictException('An invoice payment is already active or completed');
+          }
+          invoice.paymentId = null;
+        }
+      }
+
       let merchantId = createPaymentDto.merchantId;
+      let coupon: Coupon | null = null;
+      let discountAmount = 0;
+      let amountToCharge = Number(createPaymentDto.amount);
+      if (createPaymentDto.couponCode) {
+        if (!createPaymentDto.paymentLinkId) {
+          throw new BadRequestException('Coupons can only be used with a payment link');
+        }
+        const link = await queryRunner.manager.findOne(PaymentLink, {
+          where: { id: createPaymentDto.paymentLinkId },
+          lock: { mode: 'pessimistic_write' },
+        });
+        if (!link || !link.isActive || (link.expiresAt && link.expiresAt <= new Date())) {
+          throw new BadRequestException('Payment link is not available');
+        }
+        if (merchantId && merchantId !== link.merchantId) {
+          throw new BadRequestException('Payment link does not belong to this merchant');
+        }
+        merchantId = link.merchantId;
+        if (createPaymentDto.currency !== link.currency) {
+          throw new BadRequestException('Payment currency does not match payment link');
+        }
+        const baseAmount = link.flexibleAmount
+          ? Number(createPaymentDto.amount)
+          : Number(link.amount);
+        if (!link.flexibleAmount && Math.abs(baseAmount - Number(createPaymentDto.amount)) >= 0.005) {
+          throw new BadRequestException('Payment amount does not match payment link');
+        }
+        if (link.flexibleAmount && link.minAmount !== null && baseAmount < Number(link.minAmount)) {
+          throw new BadRequestException(`Payment amount must be at least ${link.minAmount}`);
+        }
+        const foundCoupon = await queryRunner.manager.findOne(Coupon, {
+          where: { merchantId, code: createPaymentDto.couponCode.trim().toUpperCase() },
+          lock: { mode: 'pessimistic_write' },
+        });
+        assertCouponUsable(foundCoupon, link.id, link.currency);
+        coupon = foundCoupon;
+        discountAmount = calculateCouponDiscount(baseAmount, coupon);
+        amountToCharge = Number((baseAmount - discountAmount).toFixed(2));
+        coupon.reservedRedemptions += 1;
+        await queryRunner.manager.save(coupon);
+      }
       if (createPaymentDto.customerId) {
-        const expectedMerchantId =
-          authenticatedMerchantId ?? createPaymentDto.merchantId;
+        const expectedMerchantId = authenticatedMerchantId ?? createPaymentDto.merchantId;
         if (!expectedMerchantId) {
           throw new BadRequestException(
             'A merchant is required when customerId is provided',
@@ -290,17 +362,23 @@ export class PaymentsService {
       // Validate merchantId if provided
       await this.validateMerchantId(merchantId);
 
-      await this.ensurePaymentLimits({ ...createPaymentDto, merchantId });
+      await this.ensurePaymentLimits({ ...createPaymentDto, amount: amountToCharge, merchantId });
       const fee = await this.calculateFee(
         merchantId,
-        Number(createPaymentDto.amount),
+        amountToCharge,
       );
       const expiresInSeconds =
         createPaymentDto.expiresIn ?? this.getDefaultExpirySeconds();
 
       const payment = queryRunner.manager.create(Payment, {
         ...createPaymentDto,
+        merchantId: merchantId ?? null,
+        amount: amountToCharge,
         recurringPaymentId: recurringPaymentId ?? null,
+        invoiceId: invoice?.id ?? null,
+        couponId: coupon?.id ?? null,
+        discountAmount,
+        couponRedemptionReserved: Boolean(coupon),
         merchantEmail: createPaymentDto.merchantEmail || null,
         payerEmail: createPaymentDto.payerEmail || null,
         payerLocale: createPaymentDto.payerLocale
@@ -314,6 +392,11 @@ export class PaymentsService {
       });
 
       const savedPayment = await queryRunner.manager.save(payment);
+
+      if (invoice) {
+        invoice.paymentId = savedPayment.id;
+        await queryRunner.manager.save(invoice);
+      }
 
       if (createPaymentDto.splits?.length) {
         const splits = createPaymentDto.splits.map((split) =>
@@ -335,6 +418,13 @@ export class PaymentsService {
       await queryRunner.commitTransaction();
       this.logger.info(`Payment created successfully: ${savedPayment.id}`);
 
+      if (savedPayment.paymentLinkId) {
+        savedPayment.successUrl = await this.paymentLinksService.getResolvedSuccessUrl(
+          savedPayment.paymentLinkId,
+          savedPayment.id,
+        );
+      }
+
       return savedPayment;
     } catch (error) {
       await queryRunner.rollbackTransaction();
@@ -347,6 +437,22 @@ export class PaymentsService {
     } finally {
       await queryRunner.release();
     }
+  }
+
+  async createForInvoice(invoice: Invoice, payerEmail?: string): Promise<Payment> {
+    const invoiceNumber = `INV-${String(invoice.number).padStart(6, '0')}`;
+    return this.create(
+      {
+        amount: Number(invoice.total),
+        currency: invoice.currency,
+        merchantId: invoice.merchantId,
+        payerEmail,
+        description: `Payment for invoice ${invoiceNumber}`,
+        dueDate: invoice.dueDate.toISOString(),
+      } as CreatePaymentDto,
+      undefined,
+      invoice.id,
+    );
   }
 
   async createBulk(
@@ -1253,8 +1359,9 @@ export class PaymentsService {
         `Starting webhook transaction for payment: ${webhookDto.paymentId}, status: ${webhookDto.status}`,
       );
 
-      const payment = await queryRunner.manager.findOneBy(Payment, {
-        id: webhookDto.paymentId,
+      const payment = await queryRunner.manager.findOne(Payment, {
+        where: { id: webhookDto.paymentId },
+        lock: { mode: 'pessimistic_write' },
       });
 
       if (!payment) {
@@ -1269,6 +1376,10 @@ export class PaymentsService {
         payment.externalReference = webhookDto.externalReference;
       }
 
+      if (previousStatus !== payment.status) {
+        await this.settleCouponReservation(queryRunner.manager, payment, payment.status);
+      }
+
       const updatedPayment = await queryRunner.manager.save(payment);
 
       if (previousStatus !== PaymentStatus.COMPLETED) {
@@ -1277,6 +1388,17 @@ export class PaymentsService {
             queryRunner.manager,
             updatedPayment,
           );
+          if (updatedPayment.invoiceId) {
+            await queryRunner.manager
+              .createQueryBuilder()
+              .update(Invoice)
+              .set({ status: InvoiceStatus.PAID, paymentId: updatedPayment.id })
+              .where('id = :invoiceId', { invoiceId: updatedPayment.invoiceId })
+              .andWhere('status IN (:...statuses)', {
+                statuses: [InvoiceStatus.OPEN, InvoiceStatus.OVERDUE],
+              })
+              .execute();
+          }
         }
       }
 
@@ -1312,6 +1434,32 @@ export class PaymentsService {
     } finally {
       await queryRunner.release();
     }
+  }
+
+  private async settleCouponReservation(
+    manager: EntityManager,
+    payment: Payment,
+    status: PaymentStatus,
+  ): Promise<void> {
+    if (!payment.couponId || !payment.couponRedemptionReserved) return;
+    if (![PaymentStatus.COMPLETED, PaymentStatus.FAILED, PaymentStatus.CANCELLED, PaymentStatus.EXPIRED].includes(status)) return;
+
+    const couponUpdate = manager
+      .createQueryBuilder()
+      .update(Coupon)
+      .set({
+        reservedRedemptions: () => '"reservedRedemptions" - 1',
+        ...(status === PaymentStatus.COMPLETED
+          ? { redemptions: () => '"redemptions" + 1' }
+          : {}),
+      })
+      .where('id = :couponId', { couponId: payment.couponId })
+      .andWhere('"reservedRedemptions" > 0');
+    const result = await couponUpdate.execute();
+    if (result.affected !== 1) {
+      throw new ConflictException('Coupon redemption reservation is no longer available');
+    }
+    payment.couponRedemptionReserved = false;
   }
 
   async findForExport(dto: GetPaymentsDto): Promise<Payment[]> {
@@ -1358,32 +1506,29 @@ export class PaymentsService {
    * Only PENDING payments can be cancelled
    */
   async cancel(id: string): Promise<Payment> {
-    const payment = await this.paymentRepository.findOneBy({ id });
-
-    if (!payment) {
-      throw new NotFoundException(`Payment with ID ${id} not found`);
-    }
-
-    // Check if payment is in a terminal state
-    const terminalStates = [
-      PaymentStatus.COMPLETED,
-      PaymentStatus.FAILED,
-      PaymentStatus.CANCELLED,
-      PaymentStatus.REFUNDED,
-      PaymentStatus.PARTIALLY_REFUNDED,
-    ];
-
-    if (terminalStates.includes(payment.status)) {
-      throw new ConflictException(
-        `Cannot cancel payment with status ${payment.status}. Only PENDING payments can be cancelled.`,
-      );
-    }
-
-    payment.status = PaymentStatus.CANCELLED;
-    payment.cancelledAt = new Date();
-    payment.updatedAt = new Date();
-
-    const updatedPayment = await this.paymentRepository.save(payment);
+    const updatedPayment = await this.dataSource.transaction(async (manager) => {
+      const payment = await manager.findOne(Payment, {
+        where: { id },
+        lock: { mode: 'pessimistic_write' },
+      });
+      if (!payment) throw new NotFoundException(`Payment with ID ${id} not found`);
+      const terminalStates = [
+        PaymentStatus.COMPLETED,
+        PaymentStatus.FAILED,
+        PaymentStatus.CANCELLED,
+        PaymentStatus.REFUNDED,
+        PaymentStatus.PARTIALLY_REFUNDED,
+      ];
+      if (terminalStates.includes(payment.status)) {
+        throw new ConflictException(
+          `Cannot cancel payment with status ${payment.status}. Only PENDING payments can be cancelled.`,
+        );
+      }
+      payment.status = PaymentStatus.CANCELLED;
+      payment.cancelledAt = new Date();
+      await this.settleCouponReservation(manager, payment, payment.status);
+      return manager.save(payment);
+    });
     this.logger.info(
       { paymentId: id, cancelledAt: updatedPayment.cancelledAt },
       'Payment cancelled successfully',
@@ -1470,10 +1615,18 @@ export class PaymentsService {
   }
 
   private async expirePayment(payment: Payment): Promise<void> {
-    payment.status = PaymentStatus.EXPIRED;
-    payment.expiredAt = new Date();
-
-    const updatedPayment = await this.paymentRepository.save(payment);
+    const updatedPayment = await this.dataSource.transaction(async (manager) => {
+      const current = await manager.findOne(Payment, {
+        where: { id: payment.id },
+        lock: { mode: 'pessimistic_write' },
+      });
+      if (!current || current.status !== PaymentStatus.PENDING) return null;
+      current.status = PaymentStatus.EXPIRED;
+      current.expiredAt = new Date();
+      await this.settleCouponReservation(manager, current, current.status);
+      return manager.save(current);
+    });
+    if (!updatedPayment) return;
     this.logger.info(
       { paymentId: payment.id },
       'Payment expired after exceeding its expiry window',
@@ -1784,6 +1937,23 @@ export class PaymentsService {
 
     const updated = await this.paymentRepository.save(payment);
 
+    if (
+      previousStatus !== updated.status &&
+      [PaymentStatus.COMPLETED, PaymentStatus.FAILED, PaymentStatus.EXPIRED].includes(updated.status) &&
+      updated.couponRedemptionReserved
+    ) {
+      await this.dataSource.transaction(async (manager) => {
+        const current = await manager.findOne(Payment, {
+          where: { id: updated.id },
+          lock: { mode: 'pessimistic_write' },
+        });
+        if (!current) return;
+        await this.settleCouponReservation(manager, current, updated.status);
+        await manager.save(current);
+      });
+      updated.couponRedemptionReserved = false;
+    }
+
     this.logger.info(
       { paymentId, outcome, previousStatus },
       'Payment simulation applied',
@@ -1807,6 +1977,20 @@ export class PaymentsService {
       updated.paymentLinkId
     ) {
       await this.paymentLinksService.incrementCompletions(updated.paymentLinkId);
+    }
+
+    if (updated.status === PaymentStatus.COMPLETED && updated.invoiceId) {
+      await this.dataSource.transaction((manager) =>
+        manager
+          .createQueryBuilder()
+          .update(Invoice)
+          .set({ status: InvoiceStatus.PAID, paymentId: updated.id })
+          .where('id = :invoiceId', { invoiceId: updated.invoiceId })
+          .andWhere('status IN (:...statuses)', {
+            statuses: [InvoiceStatus.OPEN, InvoiceStatus.OVERDUE],
+          })
+          .execute(),
+      );
     }
 
     const webhookEvent =

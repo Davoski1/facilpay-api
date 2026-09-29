@@ -20,6 +20,9 @@ import { Dispute } from './dispute.entity';
 import { SettlementAdjustment } from '../settlements/entities/settlement-adjustment.entity';
 import { UsersService } from '../users/users.service';
 import { PaymentLinksService } from '../payment-links/payment-links.service';
+import { EventsService } from '../events/events.service';
+import { Coupon, CouponType } from '../coupons/coupon.entity';
+import { PaymentLink } from '../payment-links/payment-link.entity';
 
 describe('PaymentsService', () => {
   let service: PaymentsService;
@@ -194,7 +197,14 @@ describe('PaymentsService', () => {
         },
         {
           provide: PaymentLinksService,
-          useValue: { incrementCompletions: jest.fn() },
+          useValue: {
+            incrementCompletions: jest.fn(),
+            getResolvedSuccessUrl: jest.fn().mockResolvedValue(null),
+          },
+        },
+        {
+          provide: EventsService,
+          useValue: {},
         },
         {
           provide: PaymentSseService,
@@ -287,6 +297,66 @@ describe('PaymentsService', () => {
   });
 
   describe('create', () => {
+    it('applies a coupon to the link amount and reserves its limited redemption', async () => {
+      const coupon = {
+        id: 'coupon-1',
+        merchantId: 'merchant-1',
+        code: 'SAVE10',
+        type: CouponType.PERCENT,
+        value: '10.00',
+        currency: null,
+        maxRedemptions: 1,
+        redemptions: 0,
+        reservedRedemptions: 0,
+        expiresAt: null,
+        isActive: true,
+        applicableLinkIds: null,
+      };
+      const link = {
+        id: 'link-1',
+        merchantId: 'merchant-1',
+        amount: '100.00',
+        currency: 'USD',
+        flexibleAmount: false,
+        minAmount: null,
+        expiresAt: null,
+        isActive: true,
+      };
+      const manager = {
+        findOne: jest.fn((entity) => Promise.resolve(entity === Coupon ? coupon : link)),
+        create: jest.fn((_entity, data) => data),
+        save: jest.fn(async (value) => value === coupon ? value : { id: 'discounted-payment', ...value }),
+      };
+      const runner = {
+        connect: jest.fn(),
+        startTransaction: jest.fn(),
+        commitTransaction: jest.fn(),
+        rollbackTransaction: jest.fn(),
+        release: jest.fn(),
+        manager,
+      };
+      (dataSource.createQueryRunner as jest.Mock).mockReturnValue(runner);
+
+      const payment = await service.create({
+        amount: 100,
+        currency: 'USD',
+        merchantId: 'merchant-1',
+        paymentLinkId: 'link-1',
+        couponCode: 'save10',
+      });
+
+      expect(manager.findOne).toHaveBeenCalledWith(Coupon, expect.objectContaining({
+        lock: { mode: 'pessimistic_write' },
+      }));
+      expect(coupon.reservedRedemptions).toBe(1);
+      expect(payment).toEqual(expect.objectContaining({
+        amount: 90,
+        discountAmount: 10,
+        couponId: 'coupon-1',
+        couponRedemptionReserved: true,
+      }));
+    });
+
     it('should successfully create a payment using transactions', async () => {
       const dto = {
         amount: 100.5,
@@ -349,6 +419,8 @@ describe('PaymentsService', () => {
           currency: 'USD',
           customerId: 'customer-1',
         },
+        undefined,
+        undefined,
         'merchant-1',
       );
 
@@ -387,6 +459,8 @@ describe('PaymentsService', () => {
             currency: 'USD',
             customerId: 'customer-1',
           },
+          undefined,
+          undefined,
           'merchant-1',
         ),
       ).rejects.toThrow(BadRequestException);
@@ -852,7 +926,7 @@ describe('PaymentsService', () => {
         rollbackTransaction: jest.fn(),
         release: jest.fn(),
         manager: {
-          findOneBy: jest.fn().mockResolvedValue(mockPayment1),
+          findOne: jest.fn().mockResolvedValue(mockPayment1),
           save: jest.fn().mockResolvedValue(updatedPayment),
         },
       };
@@ -865,8 +939,9 @@ describe('PaymentsService', () => {
 
       expect(mockQueryRunner.connect).toHaveBeenCalled();
       expect(mockQueryRunner.startTransaction).toHaveBeenCalled();
-      expect(mockQueryRunner.manager.findOneBy).toHaveBeenCalledWith(Payment, {
-        id: 'uuid-001',
+      expect(mockQueryRunner.manager.findOne).toHaveBeenCalledWith(Payment, {
+        where: { id: 'uuid-001' },
+        lock: { mode: 'pessimistic_write' },
       });
       expect(mockQueryRunner.commitTransaction).toHaveBeenCalled();
       expect(mockQueryRunner.release).toHaveBeenCalled();
@@ -887,7 +962,7 @@ describe('PaymentsService', () => {
         rollbackTransaction: jest.fn(),
         release: jest.fn(),
         manager: {
-          findOneBy: jest.fn().mockResolvedValue(null),
+          findOne: jest.fn().mockResolvedValue(null),
           save: jest.fn(),
         },
       };
@@ -920,7 +995,7 @@ describe('PaymentsService', () => {
         rollbackTransaction: jest.fn(),
         release: jest.fn(),
         manager: {
-          findOneBy: jest.fn().mockResolvedValue(mockPayment1),
+          findOne: jest.fn().mockResolvedValue(mockPayment1),
           save: jest.fn().mockRejectedValue(error),
         },
       };

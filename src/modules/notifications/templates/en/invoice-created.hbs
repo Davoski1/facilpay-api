@@ -1,0 +1,10 @@
+<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Invoice {{invoiceNumber}}</title></head>
+<body>
+  <p>Hello{{#if customerName}} {{customerName}}{{/if}},</p>
+  <p>You have received invoice {{invoiceNumber}} for {{formattedAmount}}.</p>
+  <p>Due date: {{dueDate}}</p>
+  <p><a href="{{payUrl}}">View and pay invoice</a></p>
+</body>
+</html>
