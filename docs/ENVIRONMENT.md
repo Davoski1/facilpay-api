@@ -120,6 +120,14 @@ used for IP allowlist / geo-restriction checks.
 | `RECURRING_PAYMENT_AUTO_PAUSE_FAILURES` | Consecutive failures before a recurring plan auto-pauses | `3` | No | `3` |
 | `IDEMPOTENCY_TTL_HOURS` | Idempotency key time-to-live (hours) | `24` | No | `24` |
 
+## Disputes
+
+| Variable | Description | Default | Required | Example |
+| --- | --- | --- | --- | --- |
+| `DISPUTE_RESPONSE_DAYS` | Days allowed to respond before a dispute is escalated | `7` | No | `7` |
+| `DISPUTE_ADMIN_EMAILS` | Comma-separated recipients for automatic escalation notices | `ADMIN_EMAIL` or empty | Recommended | `risk@example.com,ops@example.com` |
+| `ADMIN_EMAIL` | Fallback recipient for dispute escalation notices | *(empty)* | Recommended | `risk@example.com` |
+
 ## Webhooks
 
 | Variable | Description | Default | Required | Example |

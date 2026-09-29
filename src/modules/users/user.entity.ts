@@ -18,7 +18,7 @@ export class User {
   @Column()
   password: string;
 
-  @Column({ nullable: true })
+  @Column({ type: 'varchar', nullable: true })
   name: string | null = null;
 
   /** Preferred language for transactional emails (en, fr, es, pt). */

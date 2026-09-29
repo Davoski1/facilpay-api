@@ -1,4 +1,4 @@
-import { MigrationInterface, QueryRunner, Table, Index } from 'typeorm';
+import { MigrationInterface, QueryRunner, Table, TableIndex } from 'typeorm';
 
 export class CreateWebhookEndpointsTable1751100000000 implements MigrationInterface {
   public async up(queryRunner: QueryRunner): Promise<void> {
@@ -55,7 +55,7 @@ export class CreateWebhookEndpointsTable1751100000000 implements MigrationInterf
 
     await queryRunner.createIndex(
       'webhook_endpoints',
-      new Index({
+      new TableIndex({
         name: 'idx_webhook_endpoints_merchant',
         columnNames: ['merchantId'],
       }),

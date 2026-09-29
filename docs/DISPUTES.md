@@ -12,6 +12,7 @@ Disputes follow a defined lifecycle with the following statuses:
 
 - **`open`** - Dispute has been created and is awaiting review
 - **`under_review`** - Dispute is being investigated
+- **`escalated`** - Response deadline passed without resolution
 - **`resolved`** - Dispute has been resolved (with resolution notes)
 - **`closed`** - Dispute has been closed (final state)
 
@@ -20,7 +21,8 @@ Disputes follow a defined lifecycle with the following statuses:
 ```
 open → under_review → resolved → closed
   ↓         ↓
-  └─────────┴──→ closed
+  ├─────────┴──→ closed
+  └────────────→ escalated → under_review / resolved / closed
 ```
 
 ## Dispute Reasons
@@ -230,7 +232,7 @@ Webhooks are fired automatically when dispute status changes. The webhook payloa
 ### Webhook Events
 
 - `dispute.opened` - Fired when a new dispute is created
-- `dispute.updated` - Fired whenever a dispute status changes, including `under_review`
+- `dispute.updated` - Fired whenever a dispute status changes, including automatic deadline escalation
 - `dispute.resolved` - Fired alongside `dispute.updated` when status changes to resolved
 - `dispute.closed` - Fired alongside `dispute.updated` when status changes to closed
 
@@ -276,6 +278,8 @@ CREATE INDEX IDX_disputes_status ON disputes(status);
 CREATE INDEX IDX_disputes_createdAt ON disputes("createdAt");
 ```
 
+The deadline migration adds `respondBy`, `reminder3DaySentAt`, `reminder1DaySentAt`, and `escalatedAt`. Existing disputes receive a deadline seven days after creation. New dispute deadlines use `DISPUTE_RESPONSE_DAYS` (default `7`). A daily sweep sends each reminder at most once and escalates active disputes after the deadline. Escalation notices go to `DISPUTE_ADMIN_EMAILS`, falling back to `ADMIN_EMAIL`.
+
 ## Business Rules
 
 1. **Payment Eligibility**: Only payments with status `COMPLETED` or `PARTIALLY_REFUNDED` can be disputed
@@ -285,6 +289,8 @@ CREATE INDEX IDX_disputes_createdAt ON disputes("createdAt");
 5. **Disputed Amount**: Only calculated as the remaining refundable amount (payment amount - already refunded amount) when a `description` is provided when opening the dispute; otherwise `disputedAmount` is `null`
 6. **Email Notifications**: Sent asynchronously via BullMQ queue with retry logic
 7. **Webhooks**: Dispatched to all registered merchant webhook endpoints
+8. **Response deadline**: Defaults to seven days after creation; a daily sweep sends reminders at three days and one day remaining, then escalates overdue active disputes
+9. **Admin escalation email**: Sent to addresses in `DISPUTE_ADMIN_EMAILS`, falling back to `ADMIN_EMAIL`
 
 ## Error Handling
 

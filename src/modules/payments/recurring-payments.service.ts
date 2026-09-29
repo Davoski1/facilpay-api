@@ -262,17 +262,20 @@ export class RecurringPaymentsService {
 
       let paymentId: string;
       if (!existing) {
-        const paymentDto = {
-          amount: plan.amount,
-          currency: plan.currency,
-          description: plan.description ?? undefined,
-          merchantId: plan.merchantId ?? undefined,
-          customerId: plan.customerId ?? undefined,
-          merchantEmail: plan.merchantEmail ?? undefined,
-          payerEmail: plan.payerEmail ?? undefined,
-          callbackUrl: plan.callbackUrl ?? undefined,
-          metadata: plan.metadata ?? undefined,
-        }, plan.id);
+        const payment = await this.paymentsService.create(
+          {
+            amount: plan.amount,
+            currency: plan.currency,
+            description: plan.description ?? undefined,
+            merchantId: plan.merchantId ?? undefined,
+            customerId: plan.customerId ?? undefined,
+            merchantEmail: plan.merchantEmail ?? undefined,
+            payerEmail: plan.payerEmail ?? undefined,
+            callbackUrl: plan.callbackUrl ?? undefined,
+            metadata: plan.metadata ?? undefined,
+          },
+          plan.id,
+        );
         paymentId = payment.id;
       } else {
         paymentId = existing.paymentId;
@@ -433,7 +436,10 @@ export class RecurringPaymentsService {
       const key = `${plan.id}:${cycleNumber}`;
 
       // Skip if already notified for this cycle
-      if (plan.lastNotifiedCycle === cycleNumber || notifiedCycleNumbers.has(key)) {
+      if (
+        plan.lastNotifiedCycle === cycleNumber ||
+        notifiedCycleNumbers.has(key)
+      ) {
         continue;
       }
 

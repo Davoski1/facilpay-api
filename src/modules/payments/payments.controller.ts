@@ -190,6 +190,7 @@ export class PaymentsController {
     return this.paymentsService.create(
       createPaymentDto,
       undefined,
+      undefined,
       req.user?.id?.toString(),
     );
   }
