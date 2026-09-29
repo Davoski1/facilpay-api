@@ -6,11 +6,13 @@ import { PaymentLink } from './payment-link.entity';
 import { PaymentLinkEvent } from './entities/payment-link-event.entity';
 import { PaymentLinksService } from './payment-links.service';
 import { PaymentLinksController } from './payment-links.controller';
+import { MerchantsModule } from '../merchants/merchants.module';
 
 @Module({
   imports: [
     ConfigModule,
     LoggerModule,
+    MerchantsModule,
     TypeOrmModule.forFeature([PaymentLink, PaymentLinkEvent]),
   ],
   controllers: [PaymentLinksController],

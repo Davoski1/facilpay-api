@@ -45,6 +45,28 @@ export class EmailNotificationService {
     });
   }
 
+  async sendMerchantVolumeLimitWarning(
+    to: string,
+    currency: string,
+    limitType: string,
+    limit: number,
+    currentVolume: number,
+  ): Promise<void> {
+    await this.enqueue({
+      to,
+      subject: `Volume limit warning: ${currency}`,
+      templateName: 'merchant-volume-limit-warning',
+      templateData: {
+        currency,
+        limitType,
+        limit: limit.toFixed(2),
+        currentVolume: currentVolume.toFixed(2),
+      },
+      eventType: EmailEventType.PAYMENT_RECEIVED,
+      recipientRole: 'merchant',
+    });
+  }
+
   async sendMerchantRefundIssued(
     to: string,
     merchantName: string | null,

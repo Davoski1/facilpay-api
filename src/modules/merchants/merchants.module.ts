@@ -9,15 +9,18 @@ import { MerchantIpAllowlist } from './entities/merchant-ip-allowlist.entity';
 import { MerchantOnboarding } from '../onboarding/merchant-onboarding.entity';
 import { GeoLookupService } from './geo-lookup.service';
 import { AuditLogsModule } from '../audit-logs/audit-logs.module';
+import { MerchantLimit } from './entities/merchant-limit.entity';
+import { MerchantLimitsService } from './merchant-limits.service';
+import { Payment } from '../payments/payment.entity';
 
 @Module({
   imports: [
     ConfigModule,
-    TypeOrmModule.forFeature([MerchantGeoRestriction, MerchantIpAllowlist, MerchantOnboarding]),
+    TypeOrmModule.forFeature([MerchantGeoRestriction, MerchantIpAllowlist, MerchantOnboarding, MerchantLimit, Payment]),
     AuditLogsModule,
   ],
   controllers: [MerchantsController],
-  providers: [MerchantsService, GeoLookupService],
-  exports: [MerchantsService],
+  providers: [MerchantsService, GeoLookupService, MerchantLimitsService],
+  exports: [MerchantsService, MerchantLimitsService],
 })
-export class MerchantsModule {}
+export class MerchantsModule { }

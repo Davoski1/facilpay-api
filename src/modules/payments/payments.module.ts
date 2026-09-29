@@ -22,6 +22,7 @@ import { MerchantsModule } from '../merchants/merchants.module';
 import { UsersModule } from '../users/users.module';
 import { PaymentQrController } from './payment-qr.controller';
 import { MerchantFeeConfig } from './merchant-fee-config.entity';
+import { MerchantLimit } from '../merchants/entities/merchant-limit.entity';
 import { PaymentLinksModule } from '../payment-links/payment-links.module';
 import { DisputesService } from './disputes.service';
 import { DisputesController } from './disputes.controller';
@@ -47,6 +48,7 @@ import { TestnetOnlyGuard } from './guards/testnet-only.guard';
       IdempotencyKey,
       PaymentSplit,
       MerchantFeeConfig,
+      MerchantLimit,
       Dispute,
       RecurringPayment,
       RecurringPaymentCharge,

@@ -42,6 +42,7 @@ import { StellarService } from '../stellar/stellar.service';
 import { UsersService } from '../users/users.service';
 import { SettlementAdjustment } from '../settlements/entities/settlement-adjustment.entity';
 import { EventsService } from '../events/events.service';
+import { MerchantLimitsService, MerchantLimitWarning } from '../merchants/merchant-limits.service';
 
 const DEFAULT_PAYMENT_EXPIRY_SECONDS = 1800;
 const DEFAULT_MAX_REFUNDS_PER_PAYMENT = 20;
@@ -73,6 +74,7 @@ export class PaymentsService {
     private readonly usersService: UsersService,
     private readonly paymentLinksService: PaymentLinksService,
     private readonly eventsService: EventsService,
+    private readonly merchantLimitsService: MerchantLimitsService,
   ) {
     this.logger = appLogger.child({ module: PaymentsService.name });
   }
@@ -260,6 +262,8 @@ export class PaymentsService {
     recurringPaymentId?: string,
   ): Promise<Payment> {
     const queryRunner = this.dataSource.createQueryRunner();
+    let limitWarnings: MerchantLimitWarning[] = [];
+    let paymentMerchantId: string | undefined;
 
     try {
       await queryRunner.connect();
@@ -291,6 +295,13 @@ export class PaymentsService {
       await this.validateMerchantId(merchantId);
 
       await this.ensurePaymentLimits({ ...createPaymentDto, merchantId });
+      paymentMerchantId = merchantId;
+      limitWarnings = await this.merchantLimitsService.enforce(
+        merchantId,
+        createPaymentDto.currency,
+        Number(createPaymentDto.amount),
+        queryRunner.manager,
+      );
       const fee = await this.calculateFee(
         merchantId,
         Number(createPaymentDto.amount),
@@ -334,6 +345,11 @@ export class PaymentsService {
 
       await queryRunner.commitTransaction();
       this.logger.info(`Payment created successfully: ${savedPayment.id}`);
+      await this.sendMerchantLimitWarnings(
+        paymentMerchantId,
+        createPaymentDto.currency,
+        limitWarnings,
+      );
 
       return savedPayment;
     } catch (error) {
@@ -354,6 +370,11 @@ export class PaymentsService {
     authenticatedMerchantId?: string,
   ): Promise<{ created: number; payments: Payment[] }> {
     const queryRunner = this.dataSource.createQueryRunner();
+    const limitWarnings: Array<{
+      merchantId: string;
+      currency: string;
+      warnings: MerchantLimitWarning[];
+    }> = [];
 
     try {
       await queryRunner.connect();
@@ -404,27 +425,41 @@ export class PaymentsService {
         await this.validateMerchantId(merchantId);
       }
 
-      const paymentPayloads = await Promise.all(
-        resolvedPaymentDtos.map(async (createPaymentDto) => {
-          await this.ensurePaymentLimits(createPaymentDto);
-          const fee = await this.calculateFee(
-            createPaymentDto.merchantId,
-            Number(createPaymentDto.amount),
-          );
-          return {
-            ...createPaymentDto,
-            feeAmount: fee.feeAmount,
-            netAmount: fee.netAmount,
-            feeBreakdown: fee.feeBreakdown,
-            status: PaymentStatus.PENDING,
-            expiresAt: new Date(
-              Date.now() +
-                (createPaymentDto.expiresIn ?? this.getDefaultExpirySeconds()) *
-                  1000,
-            ),
-          };
-        }),
-      );
+      const batchTotals = new Map<string, number>();
+      const paymentPayloads = [];
+      for (const createPaymentDto of resolvedPaymentDtos) {
+        await this.ensurePaymentLimits(createPaymentDto);
+        const warnings = await this.merchantLimitsService.enforce(
+          createPaymentDto.merchantId,
+          createPaymentDto.currency,
+          Number(createPaymentDto.amount),
+          queryRunner.manager,
+          batchTotals,
+        );
+        if (warnings.length && createPaymentDto.merchantId) {
+          limitWarnings.push({
+            merchantId: createPaymentDto.merchantId,
+            currency: createPaymentDto.currency,
+            warnings,
+          });
+        }
+        const fee = await this.calculateFee(
+          createPaymentDto.merchantId,
+          Number(createPaymentDto.amount),
+        );
+        paymentPayloads.push({
+          ...createPaymentDto,
+          feeAmount: fee.feeAmount,
+          netAmount: fee.netAmount,
+          feeBreakdown: fee.feeBreakdown,
+          status: PaymentStatus.PENDING,
+          expiresAt: new Date(
+            Date.now() +
+              (createPaymentDto.expiresIn ?? this.getDefaultExpirySeconds()) *
+                1000,
+          ),
+        });
+      }
 
       const payments = paymentPayloads.map((createPaymentDto) =>
         queryRunner.manager.create(Payment, {
@@ -442,6 +477,13 @@ export class PaymentsService {
       const savedPayments = await queryRunner.manager.save(payments);
 
       await queryRunner.commitTransaction();
+      for (const warning of limitWarnings) {
+        await this.sendMerchantLimitWarnings(
+          warning.merchantId,
+          warning.currency,
+          warning.warnings,
+        );
+      }
       this.logger.info(
         `Bulk payment creation succeeded: ${savedPayments.length} payments created.`,
       );
@@ -462,6 +504,30 @@ export class PaymentsService {
       throw error;
     } finally {
       await queryRunner.release();
+    }
+  }
+
+  private async sendMerchantLimitWarnings(
+    merchantId: string | undefined,
+    currency: string,
+    warnings: MerchantLimitWarning[],
+  ): Promise<void> {
+    if (!merchantId || warnings.length === 0) return;
+    try {
+      const merchant = await this.usersService.findOne(merchantId);
+      for (const warning of warnings) {
+        await this.emailNotificationService.sendMerchantVolumeLimitWarning(
+          merchant.email,
+          currency,
+          warning.limitType,
+          warning.limit,
+          warning.currentVolume,
+        );
+      }
+    } catch (error) {
+      this.logger.warn(
+        `Unable to send merchant volume-limit warning for ${merchantId}: ${error instanceof Error ? error.message : String(error)}`,
+      );
     }
   }
 

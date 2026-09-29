@@ -17,6 +17,7 @@ import { PaginationDto } from '../../common/dto/pagination.dto';
 import { PaginatedResult } from '../../common/interfaces/paginated-result.interface';
 import { AppLogger } from '../logger/logger.service';
 import type { Logger } from 'pino';
+import { MerchantLimitsService } from '../merchants/merchant-limits.service';
 
 @Injectable()
 export class PaymentLinksService {
@@ -29,6 +30,7 @@ export class PaymentLinksService {
     @InjectRepository(PaymentLinkEvent)
     private readonly eventRepo: Repository<PaymentLinkEvent>,
     appLogger: AppLogger,
+    private readonly merchantLimitsService: MerchantLimitsService,
   ) {
     this.logger = appLogger.child({ module: PaymentLinksService.name });
   }
@@ -188,6 +190,12 @@ export class PaymentLinksService {
         throw new BadRequestException(`payerAmount must be at least ${link.minAmount}`);
       }
     }
+
+    await this.merchantLimitsService.enforce(
+      link.merchantId,
+      link.currency,
+      Number(link.flexibleAmount ? dto.payerAmount : link.amount),
+    );
 
     // Validate required/custom fields
     const { valid, errors } = this.validatePayerFields(link, dto);
