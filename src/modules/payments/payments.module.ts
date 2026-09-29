@@ -26,6 +26,8 @@ import { PaymentLinksModule } from '../payment-links/payment-links.module';
 import { DisputesService } from './disputes.service';
 import { DisputesController } from './disputes.controller';
 import { Dispute } from './dispute.entity';
+import { DisputeEvidence } from './dispute-evidence.entity';
+import { DisputeEvidenceService } from './dispute-evidence.service';
 import { NotificationsModule } from '../notifications/notifications.module';
 import { RecurringPayment } from './recurring-payment.entity';
 import { RecurringPaymentCharge } from './recurring-payment-charge.entity';
@@ -33,9 +35,15 @@ import { RecurringPaymentsService } from './recurring-payments.service';
 import { RecurringPaymentsController } from './recurring-payments.controller';
 import { MerchantFeesController } from './merchant-fees.controller';
 import { InvoiceService } from './invoice.service';
+import { InvoiceReminder } from './invoice-reminder.entity';
+import { InvoiceReminderService } from './invoice-reminder.service';
 import { EventsModule } from '../events/events.module';
 import { TestModeController } from './test-mode.controller';
 import { TestnetOnlyGuard } from './guards/testnet-only.guard';
+import { RefundsController } from './refunds.controller';
+import { SettlementAdjustment } from '../settlements/entities/settlement-adjustment.entity';
+import { MerchantSettings } from '../merchants/entities/merchant-settings.entity';
+import { AuditLogsModule } from '../audit-logs/audit-logs.module';
 
 @Module({
   imports: [
@@ -48,10 +56,12 @@ import { TestnetOnlyGuard } from './guards/testnet-only.guard';
       PaymentSplit,
       MerchantFeeConfig,
       Dispute,
+      DisputeEvidence,
       RecurringPayment,
       RecurringPaymentCharge,
       SettlementAdjustment,
       InvoiceReminder,
+      MerchantSettings,
     ]),
     WebhooksModule,
     StellarModule,
@@ -60,6 +70,7 @@ import { TestnetOnlyGuard } from './guards/testnet-only.guard';
     PaymentLinksModule,
     NotificationsModule,
     EventsModule,
+    AuditLogsModule,
   ],
   controllers: [
     PaymentsController,
@@ -75,6 +86,7 @@ import { TestnetOnlyGuard } from './guards/testnet-only.guard';
   providers: [
     PaymentsService,
     DisputesService,
+    DisputeEvidenceService,
     WebhookSignatureService,
     WebhookGuard,
     IdempotencyService,

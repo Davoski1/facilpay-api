@@ -4,11 +4,13 @@ import {
   ConflictException,
   BadRequestException,
   UnprocessableEntityException,
+  ForbiddenException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import {
   DataSource,
   EntityManager,
+  LessThan,
   LessThanOrEqual,
   Repository,
   SelectQueryBuilder,
@@ -16,8 +18,11 @@ import {
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { ConfigService } from '@nestjs/config';
 import { Payment, PaymentStatus } from './payment.entity';
-import { Refund, RefundReasonCode } from './refund.entity';
+import { Refund, RefundReasonCode, RefundStatus } from './refund.entity';
 import { Dispute, DisputeStatus } from './dispute.entity';
+import { MerchantSettings } from '../merchants/entities/merchant-settings.entity';
+import { AuditLogsService } from '../audit-logs/audit-logs.service';
+import { RejectRefundDto } from './dto/reject-refund.dto';
 import { PaymentSplit, PaymentSplitStatus } from './payment-split.entity';
 import { MerchantFeeConfig } from './merchant-fee-config.entity';
 import { UpsertMerchantFeeConfigDto } from './dto/upsert-merchant-fee-config.dto';
@@ -63,6 +68,8 @@ export class PaymentsService {
     private readonly disputeRepository: Repository<Dispute>,
     @InjectRepository(SettlementAdjustment)
     private readonly settlementAdjustmentRepository: Repository<SettlementAdjustment>,
+    @InjectRepository(MerchantSettings)
+    private readonly merchantSettingsRepository: Repository<MerchantSettings>,
     private readonly dataSource: DataSource,
     appLogger: AppLogger,
     private readonly paymentSseService: PaymentSseService,
@@ -73,6 +80,7 @@ export class PaymentsService {
     private readonly usersService: UsersService,
     private readonly paymentLinksService: PaymentLinksService,
     private readonly eventsService: EventsService,
+    private readonly auditLogsService: AuditLogsService,
   ) {
     this.logger = appLogger.child({ module: PaymentsService.name });
   }
@@ -1165,12 +1173,53 @@ export class PaymentsService {
         );
       }
 
+      // Check maker-checker approval threshold
+      if (payment.merchantId) {
+        const settings = await queryRunner.manager.findOneBy(MerchantSettings, {
+          merchantId: payment.merchantId,
+        });
+        const threshold = settings?.refundApprovalThresholds?.[payment.currency];
+        if (threshold !== undefined && refundAmount > threshold) {
+          const pendingRefund = queryRunner.manager.create(Refund, {
+            paymentId: id,
+            amount: refundAmount,
+            reasonCode: refundDto.reasonCode,
+            reason: refundDto.reason,
+            initiatedBy: initiatedBy ?? null,
+            status: RefundStatus.PENDING_APPROVAL,
+            expiresAt: new Date(Date.now() + 72 * 60 * 60 * 1000),
+          });
+          const savedPending = await queryRunner.manager.save(pendingRefund);
+          await queryRunner.commitTransaction();
+          this.logger.info(
+            `Refund ${savedPending.id} queued for approval (amount ${refundAmount} > threshold ${threshold} ${payment.currency})`,
+          );
+          // Notify merchant that approval is required
+          if (payment.merchantEmail) {
+            await this.emailNotificationService
+              .sendRefundApprovalRequested(
+                payment.merchantEmail,
+                payment.id,
+                savedPending.id,
+                String(refundAmount),
+                payment.currency,
+                initiatedBy ?? null,
+              )
+              .catch((err) =>
+                this.logger.error({ err }, 'Failed to send refund approval email'),
+              );
+          }
+          return { payment, refund: savedPending };
+        }
+      }
+
       const refund = queryRunner.manager.create(Refund, {
         paymentId: id,
         amount: refundAmount,
         reasonCode: refundDto.reasonCode,
         reason: refundDto.reason,
         initiatedBy: initiatedBy ?? null,
+        status: RefundStatus.EXECUTED,
       });
       attemptedRefund = refund;
 
@@ -1860,5 +1909,183 @@ export class PaymentsService {
           `Failed to dispatch ${event} webhook: ${webhookError instanceof Error ? webhookError.message : 'Unknown error'}`,
         );
       });
+  }
+
+  // ── Maker-checker refund approval ─────────────────────────────────────────
+
+  async approveRefund(
+    refundId: string,
+    approverId: string,
+  ): Promise<{ payment: Payment; refund: Refund }> {
+    const queryRunner = this.dataSource.createQueryRunner();
+    try {
+      await queryRunner.connect();
+      await queryRunner.startTransaction();
+
+      const refund = await queryRunner.manager.findOneBy(Refund, { id: refundId });
+      if (!refund) throw new NotFoundException(`Refund with ID ${refundId} not found`);
+
+      if (refund.status !== RefundStatus.PENDING_APPROVAL) {
+        throw new ConflictException(
+          `Refund is not pending approval (status: ${refund.status})`,
+        );
+      }
+      if (refund.expiresAt && refund.expiresAt < new Date()) {
+        throw new ConflictException('Refund approval window has expired');
+      }
+      if (refund.initiatedBy === approverId) {
+        throw new ForbiddenException('Cannot approve a refund you initiated');
+      }
+
+      const payment = await queryRunner.manager.findOneBy(Payment, {
+        id: refund.paymentId,
+      });
+      if (!payment) throw new NotFoundException(`Payment ${refund.paymentId} not found`);
+
+      const refundAmount = Number(refund.amount);
+      const remainingAmount = Number(payment.amount) - Number(payment.refundedAmount || 0);
+      if (refundAmount > remainingAmount) {
+        throw new ConflictException(
+          `Refund amount ${refundAmount} exceeds remaining refundable amount ${remainingAmount}`,
+        );
+      }
+
+      refund.status = RefundStatus.EXECUTED;
+      refund.approvedBy = approverId;
+      refund.approvedAt = new Date();
+      await queryRunner.manager.save(refund);
+
+      payment.refundedAmount = Number(payment.refundedAmount || 0) + refundAmount;
+      if (payment.refundedAmount >= Number(payment.amount)) {
+        payment.status = PaymentStatus.REFUNDED;
+      } else {
+        payment.status = PaymentStatus.PARTIALLY_REFUNDED;
+      }
+      const updatedPayment = await queryRunner.manager.save(payment);
+
+      if (payment.settlementId) {
+        const adjustment = queryRunner.manager.create(SettlementAdjustment, {
+          settlementId: payment.settlementId,
+          refundId: refund.id,
+          paymentId: payment.id,
+          merchantId: payment.merchantId as string,
+          amount: -refundAmount,
+          currency: payment.currency,
+        });
+        await queryRunner.manager.save(adjustment);
+      }
+
+      await this.appendRefund(queryRunner.manager, payment, refund.id, refundAmount);
+      await queryRunner.commitTransaction();
+
+      this.logger.info(`Refund ${refundId} approved by ${approverId}`);
+      this.paymentSseService.emit(updatedPayment);
+
+      await this.auditLogsService
+        .record({
+          actorId: approverId,
+          actorType: 'user',
+          action: 'refund.approved',
+          resourceType: 'refund',
+          resourceId: refundId,
+          metadata: { paymentId: payment.id, amount: refundAmount, currency: payment.currency },
+        })
+        .catch((err) => this.logger.error({ err }, 'Failed to record refund approval audit log'));
+
+      await this.sendRefundNotifications(updatedPayment, refund);
+      await this.dispatchRefundWebhook(updatedPayment, refund, 'refund.issued');
+
+      if (payment.merchantEmail) {
+        await this.emailNotificationService
+          .sendRefundApprovalOutcome(
+            payment.merchantEmail,
+            payment.id,
+            refund.id,
+            String(refundAmount),
+            payment.currency,
+            true,
+          )
+          .catch((err) => this.logger.error({ err }, 'Failed to send refund approved email'));
+      }
+
+      return { payment: updatedPayment, refund };
+    } catch (error) {
+      await queryRunner.rollbackTransaction();
+      this.logger.error(
+        `Refund approval failed: ${error instanceof Error ? error.message : 'Unknown error'}`,
+      );
+      throw error;
+    } finally {
+      await queryRunner.release();
+    }
+  }
+
+  async rejectRefund(
+    refundId: string,
+    rejecterId: string,
+    dto: RejectRefundDto,
+  ): Promise<Refund> {
+    const refund = await this.refundRepository.findOneBy({ id: refundId });
+    if (!refund) throw new NotFoundException(`Refund with ID ${refundId} not found`);
+
+    if (refund.status !== RefundStatus.PENDING_APPROVAL) {
+      throw new ConflictException(
+        `Refund is not pending approval (status: ${refund.status})`,
+      );
+    }
+    if (refund.expiresAt && refund.expiresAt < new Date()) {
+      throw new ConflictException('Refund approval window has expired');
+    }
+
+    refund.status = RefundStatus.REJECTED;
+    refund.rejectedBy = rejecterId;
+    refund.rejectedAt = new Date();
+    refund.rejectionReason = dto.reason ?? null;
+    const saved = await this.refundRepository.save(refund);
+
+    this.logger.info(`Refund ${refundId} rejected by ${rejecterId}`);
+
+    await this.auditLogsService
+      .record({
+        actorId: rejecterId,
+        actorType: 'user',
+        action: 'refund.rejected',
+        resourceType: 'refund',
+        resourceId: refundId,
+        metadata: { reason: dto.reason ?? null },
+      })
+      .catch((err) => this.logger.error({ err }, 'Failed to record refund rejection audit log'));
+
+    const payment = await this.paymentRepository.findOneBy({ id: refund.paymentId });
+    if (payment?.merchantEmail) {
+      await this.emailNotificationService
+        .sendRefundApprovalOutcome(
+          payment.merchantEmail,
+          payment.id,
+          refund.id,
+          String(refund.amount),
+          payment.currency,
+          false,
+          dto.reason,
+        )
+        .catch((err) => this.logger.error({ err }, 'Failed to send refund rejected email'));
+    }
+
+    return saved;
+  }
+
+  @Cron(CronExpression.EVERY_HOUR)
+  async expirePendingRefundApprovals(): Promise<void> {
+    const result = await this.refundRepository
+      .createQueryBuilder()
+      .update(Refund)
+      .set({ status: RefundStatus.EXPIRED })
+      .where('status = :status', { status: RefundStatus.PENDING_APPROVAL })
+      .andWhere('"expiresAt" < :now', { now: new Date() })
+      .execute();
+
+    if (result.affected && result.affected > 0) {
+      this.logger.info(`Expired ${result.affected} pending refund approval(s)`);
+    }
   }
 }

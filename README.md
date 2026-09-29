@@ -73,26 +73,49 @@ npm run docker:dev
 npm run docker:test:e2e
 ```
 
-
-```md
 ## 🩺 Health Check
 
-To verify the API is running correctly, use the health check endpoint:
+To verify the API is running correctly, use the liveness probe — it never fails due to an
+external dependency and is safe for orchestrator restart checks:
 
 ```bash
-curl -i http://localhost:3000/health 
+curl -i http://localhost:3000/v1/health/live
 ```
 
-Expected Response
+Expected response (200 OK):
 
-Status: 200 OK
-
-Body:
 ```json
 {
-  "status": "ok"
+  "status": "ok",
+  "statusCode": 200,
+  "timestamp": "2026-01-26T10:00:00.000Z",
+  "uptime": 3600
 }
 ```
+
+To check whether all dependencies (database, Stellar, Redis) are ready:
+
+```bash
+curl -i http://localhost:3000/v1/health/ready
+```
+
+Trimmed example response (200 OK — all healthy):
+
+```json
+{
+  "status": "ok",
+  "statusCode": 200,
+  "timestamp": "2026-01-26T10:00:00.000Z",
+  "uptime": 3600,
+  "services": {
+    "database": { "status": "healthy", "message": "Database connection is healthy" },
+    "stellar":  { "status": "healthy", "message": "Stellar network is reachable" },
+    "queue":    { "status": "healthy", "message": "Redis connection is healthy" }
+  }
+}
+```
+
+See [docs/HEALTH_CHECKS.md](docs/HEALTH_CHECKS.md) for full probe semantics and deployment examples.
 
 ## 🔐 Authentication
 
@@ -100,24 +123,24 @@ The API includes a JWT-based authentication system with the following endpoints:
 
 ### Register a new user
 ```bash
-curl -X POST http://localhost:3000/auth/register \
+curl -X POST http://localhost:3000/v1/auth/register \
   -H "Content-Type: application/json" \
   -d '{"email":"user@example.com","password":"password123"}'
 ```
 
 ### Login user
 ```bash
-curl -X POST http://localhost:3000/auth/login \
+curl -X POST http://localhost:3000/v1/auth/login \
   -H "Content-Type: application/json" \
   -d '{"email":"user@example.com","password":"password123"}'
 ```
 
 ### Access protected route
 ```bash
-curl -X GET http://localhost:3000/profile \
+curl -X GET http://localhost:3000/v1/users/me \
   -H "Authorization: Bearer YOUR_JWT_TOKEN"
 ```
-```
+
 ## 📁 Project Structure
 
 src/
@@ -141,7 +164,6 @@ src/
 ├── app.service.ts
 ├── app.module.ts
 └── main.ts
-```
 
 ## 🧪 Development
 
@@ -187,7 +209,24 @@ Environment variables:
 
 ```
 
-## 📚 Documentation
+## 📚 Further Documentation
 
+- [Health Checks](docs/HEALTH_CHECKS.md) — probe semantics and deployment examples
 - [Sessions](docs/SESSIONS.md) — session listing and revocation
-
+- [Refunds](docs/REFUNDS.md) — refund system and maker-checker approval flow
+- [Disputes](docs/DISPUTES.md) — dispute lifecycle and evidence uploads
+- [Webhooks](docs/WEBHOOKS.md) — webhook endpoints and event types
+- [RBAC](docs/RBAC.md) — role-based access control
+- [Audit Log](docs/AUDIT_LOG.md) — audit logging
+- [Settlements](docs/SETTLEMENTS.md) — settlement processing
+- [Payment Splits](docs/PAYMENT_SPLITS.md) — payment splitting
+- [Payment Links](docs/PAYMENT_LINKS.md) — payment link generation
+- [Merchant Rate Limiting](docs/MERCHANT_RATE_LIMITING.md) — rate limiting
+- [Merchant Access Controls](docs/MERCHANT_ACCESS_CONTROLS.md) — merchant ACL
+- [Idempotency](docs/IDEMPOTENCY.md) — idempotency for safe retries
+- [Ledger](docs/LEDGER.md) — ledger and accounting
+- [Rates](docs/RATES.md) — currency rates and conversion
+- [Stellar](docs/STELLAR.md) — Stellar network integration
+- [Two-Factor Auth](docs/TWO_FACTOR_AUTH.md) — 2FA implementation
+- [Password Reset](docs/PASSWORD_RESET.md) — password reset flow
+- [Environment](docs/ENVIRONMENT.md) — environment variable reference
