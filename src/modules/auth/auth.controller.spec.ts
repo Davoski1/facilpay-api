@@ -21,6 +21,7 @@ import { getRepositoryToken } from '@nestjs/typeorm';
 import { Role } from './entities/role.entity';
 import { WebAuthnService } from './webauthn.service';
 import { LoginAlertsService } from './login-alerts.service';
+import type { Response } from 'express';
 
 describe('AuthController', () => {
   let controller: AuthController;
@@ -207,6 +208,30 @@ describe('AuthController', () => {
         'device-1',
       );
       expect(result).toEqual(loginResult);
+    });
+  });
+
+  describe('confirmUnrecognizedLogin', () => {
+    it('renders a confirmation form instead of revoking sessions on GET', async () => {
+      const responseMock = {
+        status: jest.fn(),
+        type: jest.fn(),
+        send: jest.fn(),
+      };
+      responseMock.status.mockReturnValue(responseMock);
+      responseMock.type.mockReturnValue(responseMock);
+
+      await controller.confirmUnrecognizedLogin(
+        'single-use-token',
+        responseMock as unknown as Response,
+      );
+
+      expect(responseMock.status).toHaveBeenCalledWith(HttpStatus.OK);
+      expect(responseMock.type).toHaveBeenCalledWith('html');
+      expect(responseMock.send).toHaveBeenCalledWith(
+        expect.stringContaining('method="post"'),
+      );
+      expect(mockLoginAlertsService.reportNotMe).not.toHaveBeenCalled();
     });
   });
 

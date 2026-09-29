@@ -334,6 +334,32 @@ export class AuthController {
   @Public()
   @Get('login-alerts/:token/report')
   @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Confirm a report of an unrecognized sign-in' })
+  @ApiOkResponse({ description: 'Confirmation page for the sign-in report.' })
+  async confirmUnrecognizedLogin(
+    @Param('token') token: string,
+    @Res() response: Response,
+  ) {
+    const actionUrl = `/v1/auth/login-alerts/${encodeURIComponent(token)}/report`;
+    return response
+      .status(HttpStatus.OK)
+      .type('html')
+      .send(
+        '<!doctype html><html><head><meta charset="utf-8">' +
+          '<meta name="viewport" content="width=device-width, initial-scale=1">' +
+          '<title>Secure your FacilPay account</title></head><body>' +
+          '<main><h1>Report this sign-in?</h1>' +
+          '<p>Confirming will revoke all account sessions and require a password reset.</p>' +
+          `<form method="post" action="${actionUrl}">` +
+          '<button type="submit">Revoke sessions and reset password</button>' +
+          '</form></main></body></html>',
+      );
+  }
+
+  @AuthThrottle()
+  @Public()
+  @Post('login-alerts/:token/report')
+  @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Report an unrecognized sign-in and secure the account' })
   @ApiOkResponse({ description: 'Sessions revoked and password reset started.' })
   async reportUnrecognizedLogin(@Param('token') token: string) {
