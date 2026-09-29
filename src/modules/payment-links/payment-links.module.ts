@@ -14,6 +14,7 @@ import { CouponsModule } from '../coupons/coupons.module';
     CouponsModule,
     LoggerModule,
     TypeOrmModule.forFeature([PaymentLink, PaymentLinkEvent]),
+    UsersModule,
   ],
   controllers: [PaymentLinksController],
   providers: [PaymentLinksService],

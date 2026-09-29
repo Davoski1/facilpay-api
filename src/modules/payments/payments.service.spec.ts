@@ -193,7 +193,10 @@ describe('PaymentsService', () => {
         },
         {
           provide: UsersService,
-          useValue: { findOne: jest.fn().mockResolvedValue({ id: 'merchant-1' }) },
+          useValue: {
+            findOne: jest.fn().mockResolvedValue({ id: 'merchant-1' }),
+            assertMerchantActive: jest.fn().mockResolvedValue(undefined),
+          },
         },
         {
           provide: PaymentLinksService,
@@ -216,7 +219,7 @@ describe('PaymentsService', () => {
         },
         {
           provide: StellarService,
-          useValue: { sendPayment: jest.fn() },
+          useValue: { sendPayment: jest.fn(), sendPayout: jest.fn() },
         },
         {
           provide: ConfigService,

@@ -21,6 +21,7 @@ import { PaginationDto } from '../../common/dto/pagination.dto';
 import { PaginatedResult } from '../../common/interfaces/paginated-result.interface';
 import { AppLogger } from '../logger/logger.service';
 import type { Logger } from 'pino';
+import { UsersService } from '../users/users.service';
 
 @Injectable()
 export class PaymentLinksService {
@@ -34,6 +35,7 @@ export class PaymentLinksService {
     private readonly eventRepo: Repository<PaymentLinkEvent>,
     private readonly couponsService: CouponsService,
     appLogger: AppLogger,
+    private readonly usersService: UsersService,
   ) {
     this.logger = appLogger.child({ module: PaymentLinksService.name });
   }
@@ -124,6 +126,7 @@ export class PaymentLinksService {
   }
 
   async create(dto: CreatePaymentLinkDto, merchantId: string): Promise<PaymentLink> {
+    await this.usersService.assertMerchantActive(merchantId);
     if (!dto.flexibleAmount && (dto.amount === undefined || dto.amount === null)) {
       throw new BadRequestException('amount is required when flexibleAmount is not true');
     }
@@ -188,6 +191,7 @@ export class PaymentLinksService {
     dto: RedeemPaymentLinkDto,
   ): Promise<PaymentLink & { couponPreview?: { couponId: string; discountAmount: number; amountDue: number } }> {
     const link = await this.findByTokenOrSlug(tokenOrSlug);
+    await this.usersService.assertMerchantActive(link.merchantId);
 
     // Handle flexible amount
     if (link.flexibleAmount) {
