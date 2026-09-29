@@ -6,6 +6,10 @@ import { PaymentsService } from './payments.service';
 import { PaymentsController } from './payments.controller';
 import { CustomerPaymentsController } from './customer-payments.controller';
 import { Payment } from './payment.entity';
+import { Invoice } from '../invoices/invoice.entity';
+import { Coupon } from '../coupons/coupon.entity';
+import { PaymentLink } from '../payment-links/payment-link.entity';
+import { CouponsModule } from '../coupons/coupons.module';
 import { Refund } from './refund.entity';
 import { PaymentSplit } from './payment-split.entity';
 import { WebhookSignatureService } from './webhook-signature.service';
@@ -51,6 +55,9 @@ import { AuditLogsModule } from '../audit-logs/audit-logs.module';
     ScheduleModule.forRoot(),
     TypeOrmModule.forFeature([
       Payment,
+      Invoice,
+      Coupon,
+      PaymentLink,
       Refund,
       IdempotencyKey,
       PaymentSplit,
@@ -68,6 +75,7 @@ import { AuditLogsModule } from '../audit-logs/audit-logs.module';
     MerchantsModule,
     UsersModule,
     PaymentLinksModule,
+    CouponsModule,
     NotificationsModule,
     EventsModule,
     AuditLogsModule,

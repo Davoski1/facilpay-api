@@ -10,6 +10,7 @@ import { Reflector } from '@nestjs/core';
 import { ApiKeysService } from './api-keys.service';
 import { extractClientIp, parseTrustedProxyList } from '../merchants/ip-utils';
 import { REQUIRE_SCOPE_KEY } from './decorators/require-scope.decorator';
+import { UsersService } from '../users/users.service';
 
 @Injectable()
 export class ApiKeyAuthGuard implements CanActivate {
@@ -19,6 +20,7 @@ export class ApiKeyAuthGuard implements CanActivate {
     private readonly apiKeysService: ApiKeysService,
     private readonly reflector: Reflector,
     configService: ConfigService,
+    private readonly usersService: UsersService,
   ) {
     this.trustedProxies = parseTrustedProxyList(
       configService.get<string>('TRUSTED_PROXY_IPS'),
@@ -34,6 +36,7 @@ export class ApiKeyAuthGuard implements CanActivate {
     }
 
     const apiKey = await this.apiKeysService.validateKey(plaintext);
+    await this.usersService.assertMerchantActive(apiKey.userId);
     request.apiKey = apiKey;
     request.user = { id: apiKey.userId };
 

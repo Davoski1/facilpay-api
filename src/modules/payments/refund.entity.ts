@@ -19,11 +19,10 @@ export enum RefundReasonCode {
 }
 
 export enum RefundStatus {
-  PENDING_APPROVAL = 'PENDING_APPROVAL',
-  EXECUTED = 'EXECUTED',
-  APPROVED = 'APPROVED',
-  REJECTED = 'REJECTED',
-  EXPIRED = 'EXPIRED',
+  PENDING = 'PENDING',
+  COMPLETED = 'COMPLETED',
+  CLAIMABLE = 'CLAIMABLE',
+  FAILED = 'FAILED',
 }
 
 @Entity('refunds')
@@ -55,6 +54,15 @@ export class Refund {
   @Column({ nullable: true })
   @ApiPropertyOptional()
   reason: string;
+
+  @Column({ type: 'varchar', length: 16, default: RefundStatus.COMPLETED })
+  status: RefundStatus = RefundStatus.COMPLETED;
+
+  @Column({ type: 'varchar', nullable: true })
+  stellarTransactionHash: string | null = null;
+
+  @Column({ type: 'varchar', nullable: true })
+  claimableBalanceId: string | null = null;
 
   @Column({ nullable: true })
   @ApiPropertyOptional({ description: 'User ID or system actor that initiated the refund' })

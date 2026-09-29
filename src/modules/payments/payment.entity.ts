@@ -124,6 +124,22 @@ export class Payment {
   paymentLinkId: string | null = null;
 
   @Index()
+  @Column({ type: 'uuid', nullable: true })
+  invoiceId: string | null = null;
+
+  @Index()
+  @Column({ type: 'uuid', nullable: true })
+  couponId: string | null = null;
+
+  @Column({ type: 'decimal', precision: 12, scale: 2, default: 0 })
+  discountAmount: number;
+
+  @Column({ type: 'boolean', default: false })
+  couponRedemptionReserved: boolean;
+
+  successUrl?: string | null;
+
+  @Index()
   @Column({ type: 'timestamp', nullable: true })
   dueDate: Date | null = null;
 

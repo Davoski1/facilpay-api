@@ -107,6 +107,7 @@ describe('PaymentsService - MerchantId Validation', () => {
           provide: UsersService,
           useValue: {
             findOne: jest.fn(),
+            assertMerchantActive: jest.fn().mockResolvedValue(undefined),
           },
         },
       ],

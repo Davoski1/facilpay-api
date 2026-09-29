@@ -16,7 +16,7 @@ export class AddAccountLockoutToUsers1706100000000 implements MigrationInterface
       new TableColumn({
         name: 'lockedUntil',
         type: 'timestamp',
-        nullable: true,
+        isNullable: true,
       }),
     );
   }

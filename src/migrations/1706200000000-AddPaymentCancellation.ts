@@ -7,7 +7,7 @@ export class AddPaymentCancellation1706200000000 implements MigrationInterface {
       new TableColumn({
         name: 'cancelledAt',
         type: 'timestamp',
-        nullable: true,
+        isNullable: true,
       }),
     );
 

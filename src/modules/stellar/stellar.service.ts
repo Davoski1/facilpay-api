@@ -10,12 +10,53 @@ import { AddTrustlineDto } from './dto/add-trustline.dto';
 import { RemoveTrustlineDto } from './dto/remove-trustline.dto';
 import { WebhooksService } from '../webhooks/webhooks.service';
 import { StellarHorizonClientService } from './stellar-horizon-client.service';
+import { Cron } from '@nestjs/schedule';
+import { MailService } from '../auth/mail/mail.service';
+
+export interface StellarLowBalanceThreshold {
+  assetCode: string;
+  threshold: number;
+}
+
+export function parseLowBalanceThresholds(value?: string): StellarLowBalanceThreshold[] {
+  if (!value?.trim()) return [];
+  const thresholds = new Map<string, number>();
+  for (const entry of value.split(',')) {
+    const [rawAssetCode, rawThreshold, ...extra] = entry.split(':');
+    const assetCode = rawAssetCode?.trim().toUpperCase();
+    const threshold = Number(rawThreshold?.trim());
+    if (
+      extra.length > 0 ||
+      !assetCode ||
+      !/^[A-Z0-9]{1,12}$/.test(assetCode) ||
+      !Number.isFinite(threshold) ||
+      threshold < 0
+    ) {
+      continue;
+    }
+    thresholds.set(assetCode, threshold);
+  }
+  return [...thresholds.entries()].map(([assetCode, threshold]) => ({ assetCode, threshold }));
+}
 
 @Injectable()
 export class StellarService {
   private readonly logger = new Logger(StellarService.name);
   private readonly networkPassphrase: string;
   private readonly sourceKeypair: StellarSdk.Keypair;
+  private feeStatsCache: { fee: number; expiresAt: number } | null = null;
+  private readonly lastLowBalanceAlerts = new Map<string, number>();
+  private lowBalanceHealth: {
+    status: 'unknown' | 'healthy' | 'degraded';
+    message: string;
+    lowAssets: string[];
+    checkedAt: string | null;
+  } = {
+    status: 'unknown',
+    message: 'Distribution account balance has not been checked yet',
+    lowAssets: [],
+    checkedAt: null,
+  };
 
   constructor(
     private configService: ConfigService,
@@ -26,6 +67,7 @@ export class StellarService {
     @Inject(forwardRef(() => WebhooksService))
     private readonly webhooksService: WebhooksService,
     private readonly horizonClientService: StellarHorizonClientService,
+    private readonly mailService: MailService,
   ) {
     const secret = this.configService.get<string>('STELLAR_SOURCE_SECRET');
     const network = this.configService.get<string>('STELLAR_NETWORK');
@@ -48,23 +90,38 @@ export class StellarService {
     merchantId?: string,
     asset: StellarSdk.Asset = StellarSdk.Asset.native(),
   ) {
+    return this.submitPaymentWithRetry(destination, amount, memo, merchantId, asset, 0);
+  }
+
+  private async submitPaymentWithRetry(
+    destination: string,
+    amount: string,
+    memo: string | undefined,
+    merchantId: string | undefined,
+    asset: StellarSdk.Asset,
+    attemptNumber: number,
+  ): Promise<any> {
     try {
       const sourceAccount = await this.getServer().loadAccount(this.sourceKeypair.publicKey());
+      const baseFee = this.getBaseFee();
+      const maxFee = this.getMaxFee(baseFee);
+      const fee = String(Math.min(maxFee, (await this.getRecommendedFee()) * (attemptNumber + 1)));
+      this.logger.log(`Submitting Stellar transaction with fee ${fee} stroops`);
 
-      const baseFee = this.configService.get<string>('STELLAR_BASE_FEE', '100');
-      const fee = String(parseInt(baseFee) * (attemptNumber + 1));
+      const claimable = !asset.isNative() && !(await this.destinationHasTrustline(destination, asset));
+      const operation = claimable
+        ? StellarSdk.Operation.createClaimableBalance({
+            asset,
+            amount,
+            claimants: this.getClaimableBalanceClaimants(destination),
+          })
+        : StellarSdk.Operation.payment({ destination, asset, amount });
 
       let transactionBuilder = new StellarSdk.TransactionBuilder(sourceAccount, {
         fee,
         networkPassphrase: this.networkPassphrase,
       })
-        .addOperation(
-          StellarSdk.Operation.payment({
-            destination,
-            asset,
-            amount,
-          }),
-        )
+        .addOperation(operation)
         .setTimeout(30);
 
       if (memo) {
@@ -114,7 +171,22 @@ export class StellarService {
       const response = await this.getServer().submitTransaction(transaction);
 
       this.logger.log(`Payment successful: ${response.hash}`);
+      let claimableBalanceId: string | null = null;
+      if (claimable) {
+        const operations = await this.getServer()
+          .operations()
+          .forTransaction(response.hash)
+          .call();
+        const createBalance = operations.records.find(
+          (record: any) => record.type === 'create_claimable_balance',
+        ) as any;
+        claimableBalanceId = createBalance?.balance_id ?? null;
+        if (!claimableBalanceId) {
+          this.logger.error(`Claimable balance ID was not returned for transaction ${response.hash}`);
+        }
+      }
       return {
+        ...(claimable ? { status: 'claimable', claimableBalanceId } : {}),
         hash: response.hash,
         ledger: response.ledger,
       };
@@ -129,11 +201,206 @@ export class StellarService {
           { attemptNumber: attemptNumber + 1, destination, error: error.message },
           'Transaction failed with insufficient fee or timeout, retrying with higher fee',
         );
-        return this.submitPaymentWithRetry(destination, amount, memo, merchantId, attemptNumber + 1);
+        return this.submitPaymentWithRetry(
+          destination,
+          amount,
+          memo,
+          merchantId,
+          asset,
+          attemptNumber + 1,
+        );
       }
 
       this.handleStellarError(error);
     }
+  }
+
+  private async destinationHasTrustline(
+    destination: string,
+    asset: StellarSdk.Asset,
+  ): Promise<boolean> {
+    const accountId = StellarSdk.StrKey.isValidMuxedAccount(destination)
+      ? StellarSdk.MuxedAccount.fromAddress(destination, '0').accountId()
+      : destination;
+    try {
+      const account = await this.getServer().loadAccount(accountId);
+      return account.balances.some(
+        (balance: any) =>
+          balance.asset_code === asset.code &&
+          balance.asset_issuer === asset.issuer,
+      );
+    } catch (error: any) {
+      if (error?.status === 404 || error?.response?.status === 404) return false;
+      throw error;
+    }
+  }
+
+  private getClaimableBalanceClaimants(destination: string): StellarSdk.Claimant[] {
+    const reclaimDays = Math.max(
+      1,
+      Number(this.configService.get<string>('STELLAR_CLAIMABLE_RECLAIM_DAYS', '90')) || 90,
+    );
+    const reclaimAt = Math.floor(Date.now() / 1000) + reclaimDays * 24 * 60 * 60;
+    return [
+      new StellarSdk.Claimant(destination, StellarSdk.Claimant.predicateUnconditional()),
+      new StellarSdk.Claimant(
+        this.sourceKeypair.publicKey(),
+        StellarSdk.Claimant.predicateNot(
+          StellarSdk.Claimant.predicateBeforeAbsoluteTime(String(reclaimAt)),
+        ),
+      ),
+    ];
+  }
+
+  private getServer(): StellarSdk.Horizon.Server {
+    return this.horizonClientService.getHealthyServer();
+  }
+
+  getLowBalanceHealth() {
+    return { ...this.lowBalanceHealth, lowAssets: [...this.lowBalanceHealth.lowAssets] };
+  }
+
+  @Cron('*/10 * * * *')
+  async monitorDistributionBalances(): Promise<void> {
+    const thresholds = parseLowBalanceThresholds(
+      this.configService.get<string>('STELLAR_LOW_BALANCE_THRESHOLDS', ''),
+    );
+    if (thresholds.length === 0) {
+      this.lowBalanceHealth = {
+        status: 'healthy',
+        message: 'Low-balance monitoring is not configured',
+        lowAssets: [],
+        checkedAt: new Date().toISOString(),
+      };
+      return;
+    }
+
+    try {
+      const account = await this.getServer().loadAccount(this.sourceKeypair.publicKey());
+      const results = thresholds.map(({ assetCode, threshold }) => {
+        const balanceRecord = assetCode === 'XLM'
+          ? account.balances.find((balance: any) => balance.asset_type === 'native')
+          : account.balances.find((balance: any) => balance.asset_code === assetCode);
+        const balance = balanceRecord ? Number(balanceRecord.balance) : 0;
+        return { assetCode, threshold, balance: Number.isFinite(balance) ? balance : 0 };
+      });
+      const lowBalances = results.filter(({ balance, threshold }) => balance < threshold);
+      this.lowBalanceHealth = {
+        status: lowBalances.length > 0 ? 'degraded' : 'healthy',
+        message: lowBalances.length > 0
+          ? `Below threshold: ${lowBalances.map(({ assetCode }) => assetCode).join(', ')}`
+          : 'All configured distribution-account balances are above threshold',
+        lowAssets: lowBalances.map(({ assetCode }) => assetCode),
+        checkedAt: new Date().toISOString(),
+      };
+
+      for (const lowBalance of lowBalances) {
+        await this.sendLowBalanceAlertIfDue(lowBalance);
+      }
+    } catch (error) {
+      this.logger.error(
+        `Failed to check Stellar distribution-account balances: ${error instanceof Error ? error.message : String(error)}`,
+      );
+      this.lowBalanceHealth = {
+        status: 'unknown',
+        message: 'Unable to check Stellar distribution-account balances',
+        lowAssets: [],
+        checkedAt: new Date().toISOString(),
+      };
+    }
+  }
+
+  private async sendLowBalanceAlertIfDue(alert: {
+    assetCode: string;
+    threshold: number;
+    balance: number;
+  }): Promise<void> {
+    const now = Date.now();
+    const previousAlertAt = this.lastLowBalanceAlerts.get(alert.assetCode) ?? 0;
+    if (now - previousAlertAt < 60 * 60 * 1000) return;
+    this.lastLowBalanceAlerts.set(alert.assetCode, now);
+
+    const accountAddress = this.sourceKeypair.publicKey();
+    const payload = {
+      event: 'stellar.distribution_balance_low',
+      timestamp: new Date(now).toISOString(),
+      account: accountAddress,
+      assetCode: alert.assetCode,
+      balance: String(alert.balance),
+      threshold: alert.threshold,
+    };
+    const recipients = (this.configService.get<string>('STELLAR_OPS_EMAILS', '') || '')
+      .split(',')
+      .map((email) => email.trim())
+      .filter(Boolean);
+    await Promise.all(recipients.map((email) =>
+      this.mailService.sendLowStellarBalanceAlert(
+        email,
+        alert.assetCode,
+        String(alert.balance),
+        alert.threshold,
+        accountAddress,
+      ).catch((error) => this.logger.error(`Failed to email low-balance alert to ${email}: ${error instanceof Error ? error.message : String(error)}`)),
+    ));
+
+    const webhookUrl = this.configService.get<string>('STELLAR_LOW_BALANCE_WEBHOOK_URL');
+    if (webhookUrl) {
+      try {
+        const response = await fetch(webhookUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+        if (!response.ok) throw new Error(`Webhook returned ${response.status}`);
+      } catch (error) {
+        this.logger.error(`Failed to send low-balance webhook: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
+  }
+
+  private getBaseFee(): number {
+    const configured = Number(this.configService.get<string>('STELLAR_BASE_FEE', '100'));
+    return Number.isFinite(configured) && configured > 0 ? Math.floor(configured) : 100;
+  }
+
+  private getMaxFee(baseFee = this.getBaseFee()): number {
+    const configured = Number(this.configService.get<string>('STELLAR_MAX_FEE', '1000'));
+    return Math.max(baseFee, Number.isFinite(configured) && configured > 0 ? Math.floor(configured) : 1000);
+  }
+
+  private async getRecommendedFee(): Promise<number> {
+    const now = Date.now();
+    if (this.feeStatsCache && this.feeStatsCache.expiresAt > now) {
+      return this.feeStatsCache.fee;
+    }
+
+    const baseFee = this.getBaseFee();
+    const maxFee = this.getMaxFee(baseFee);
+    const configuredPercentile = this.configService.get<string>('STELLAR_FEE_PERCENTILE', 'p70');
+    const percentile = /^p(?:10|20|30|40|50|60|70|80|90|95|99)$/.test(configuredPercentile)
+      ? configuredPercentile
+      : 'p70';
+    let selectedFee = baseFee;
+    const horizonUrl = this.configService.get<string>(
+      'STELLAR_HORIZON_URL',
+      'https://horizon-testnet.stellar.org',
+    ).replace(/\/$/, '');
+
+    try {
+      const response = await fetch(`${horizonUrl}/fee_stats`);
+      if (!response.ok) throw new Error(`Horizon fee_stats returned ${response.status}`);
+      const stats = await response.json() as { fee_charged?: Record<string, unknown> };
+      const observedFee = Number(stats.fee_charged?.[percentile]);
+      if (!Number.isFinite(observedFee) || observedFee <= 0) {
+        throw new Error(`Horizon fee_stats did not contain a valid ${percentile} fee`);
+      }
+      selectedFee = Math.min(maxFee, Math.max(baseFee, Math.ceil(observedFee)));
+    } catch (error) {
+      this.logger.warn(`Unable to retrieve Horizon fee_stats; using static fee ${baseFee}: ${error instanceof Error ? error.message : String(error)}`);
+    }
+
+    this.feeStatsCache = { fee: selectedFee, expiresAt: now + 30_000 };
+    return selectedFee;
   }
 
   private isTimeoutError(error: any): boolean {
@@ -210,7 +477,7 @@ export class StellarService {
 
     let account: StellarSdk.Horizon.AccountResponse;
     try {
-      account = await this.server.loadAccount(address);
+      account = await this.getServer().loadAccount(address);
     } catch {
       throw new BadRequestException('Destination Stellar account does not exist');
     }
@@ -247,7 +514,7 @@ export class StellarService {
     let asset = StellarSdk.Asset.native();
 
     if (assetCode !== 'XLM') {
-      const source = await this.server.loadAccount(this.sourceKeypair.publicKey());
+      const source = await this.getServer().loadAccount(this.sourceKeypair.publicKey());
       const balance = source.balances.find(
         (b: any) => b.asset_code === assetCode && b.asset_issuer,
       ) as { asset_issuer: string } | undefined;

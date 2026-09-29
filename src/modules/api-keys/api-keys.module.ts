@@ -7,9 +7,10 @@ import { ApiKeysService } from './api-keys.service';
 import { ApiKeysController } from './api-keys.controller';
 import { ApiKeyAuthGuard } from './api-key-auth.guard';
 import { AuditLogsModule } from '../audit-logs/audit-logs.module';
+import { UsersModule } from '../users/users.module';
 
 @Module({
-  imports: [TypeOrmModule.forFeature([ApiKey, ApiKeyUsage]), ConfigModule, AuditLogsModule],
+  imports: [TypeOrmModule.forFeature([ApiKey, ApiKeyUsage]), ConfigModule, AuditLogsModule, UsersModule],
   controllers: [ApiKeysController],
   providers: [ApiKeysService, ApiKeyAuthGuard],
   exports: [ApiKeysService, ApiKeyAuthGuard],

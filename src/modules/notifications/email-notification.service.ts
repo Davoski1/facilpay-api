@@ -102,6 +102,42 @@ export class EmailNotificationService {
     });
   }
 
+  async sendDisputeResponseReminder(
+    to: string,
+    data: { disputeId: string; paymentId: string; respondBy: Date; daysRemaining: number },
+  ): Promise<void> {
+    await this.enqueue({
+      to,
+      subject: `Dispute response due in ${data.daysRemaining} day${data.daysRemaining === 1 ? '' : 's'}`,
+      templateName: 'dispute-response-reminder',
+      templateData: {
+        ...data,
+        respondBy: formatDate(data.respondBy),
+      },
+      eventType: EmailEventType.DISPUTE_RESPONSE_REMINDER,
+      recipientRole: 'merchant',
+      paymentId: data.paymentId,
+    });
+  }
+
+  async sendDisputeEscalatedNotice(
+    to: string,
+    data: { disputeId: string; paymentId: string; respondBy: Date },
+  ): Promise<void> {
+    await this.enqueue({
+      to,
+      subject: `Dispute ${data.disputeId} escalated`,
+      templateName: 'dispute-escalated',
+      templateData: {
+        ...data,
+        respondBy: formatDate(data.respondBy),
+      },
+      eventType: EmailEventType.DISPUTE_ESCALATED,
+      recipientRole: 'admin',
+      paymentId: data.paymentId,
+    });
+  }
+
   async sendPayerDisputeOpened(
     to: string,
     payerName: string | null,
@@ -455,6 +491,31 @@ export class EmailNotificationService {
       paymentId: data.paymentId,
       includeUnsubscribe: true,
       locale,
+    });
+  }
+
+  async sendInvoiceCreated(
+    to: string,
+    data: {
+      invoiceNumber: string;
+      customerName: string | null;
+      amount: string;
+      currency: string;
+      dueDate: string;
+      payUrl: string;
+    },
+  ): Promise<void> {
+    await this.enqueue({
+      to,
+      subject: `Invoice ${data.invoiceNumber} from FacilPay`,
+      templateName: 'invoice-created',
+      templateData: {
+        ...data,
+        dueDate: formatDate(new Date(data.dueDate)),
+        formattedAmount: formatMoney(data.amount, data.currency),
+      },
+      eventType: EmailEventType.INVOICE_CREATED,
+      recipientRole: 'payer',
     });
   }
 

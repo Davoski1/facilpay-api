@@ -10,10 +10,17 @@ import {
   IsBoolean,
   ValidateIf,
   IsInt,
+  IsArray,
+  IsEnum,
+  Matches,
+  ValidateNested,
+  ArrayMinSize,
+  ArrayMaxSize,
 } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { IsISO4217CurrencyCode } from '../../../common/validators/is-iso4217-currency-code.validator';
 import { Type, Transform } from 'class-transformer';
+import { IsSafeHttpsUrl } from '../../../common/validators/is-safe-https-url.validator';
 
 export class CustomFieldDto {
   @IsString()
@@ -102,4 +109,37 @@ export class CreatePaymentLinkDto {
   @IsOptional()
   @ApiPropertyOptional({ description: 'Maximum number of completed payments before the link deactivates', example: 1, minimum: 1 })
   maxCompletions?: number;
+
+  @IsString()
+  @Matches(/^[a-z0-9-]{3,64}$/)
+  @IsOptional()
+  @ApiPropertyOptional({ example: 'acme-services' })
+  slug?: string;
+
+  @ValidateNested()
+  @Type(() => RequiredFieldsDto)
+  @IsOptional()
+  @ApiPropertyOptional({ type: RequiredFieldsDto })
+  requiredFields?: RequiredFieldsDto;
+
+  @IsArray()
+  @ValidateNested({ each: true })
+  @ArrayMinSize(1)
+  @ArrayMaxSize(5)
+  @Type(() => CustomFieldDto)
+  @IsOptional()
+  @ApiPropertyOptional({ type: [CustomFieldDto] })
+  customFields?: CustomFieldDto[];
+
+  @IsSafeHttpsUrl()
+  @MaxLength(2048)
+  @IsOptional()
+  @ApiPropertyOptional({ example: 'https://merchant.example.com/paid?payment_id={PAYMENT_ID}', maxLength: 2048 })
+  successUrl?: string;
+
+  @IsSafeHttpsUrl()
+  @MaxLength(2048)
+  @IsOptional()
+  @ApiPropertyOptional({ example: 'https://merchant.example.com/cancelled', maxLength: 2048 })
+  cancelUrl?: string;
 }

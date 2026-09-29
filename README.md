@@ -211,7 +211,7 @@ Environment variables:
 
 ## 📚 Further Documentation
 
-- [Health Checks](docs/HEALTH_CHECKS.md) — probe semantics and deployment examples
+- [Contributing](CONTRIBUTING.md) — setup, conventions, PR checklist
 - [Sessions](docs/SESSIONS.md) — session listing and revocation
 - [Refunds](docs/REFUNDS.md) — refund system and maker-checker approval flow
 - [Disputes](docs/DISPUTES.md) — dispute lifecycle and evidence uploads
