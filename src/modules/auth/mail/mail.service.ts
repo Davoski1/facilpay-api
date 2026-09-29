@@ -190,4 +190,76 @@ export class MailService {
       html: `<p>Your account has been temporarily locked after repeated failed login attempts.</p><p>It will unlock in <strong>${lockDurationMinutes}</strong> minutes.</p><p>If this was not you, secure your account immediately.</p>`,
     });
   }
+
+  async sendSecurityAlertEmail(to: string, event: string): Promise<void> {
+    await this.transporter.sendMail({
+      from: this.configService.get<string>(
+        'SMTP_FROM',
+        '"FacilPay" <noreply@facilpay.com>',
+      ),
+      to,
+      subject: `FacilPay security alert: ${event}`,
+      text: `A security-sensitive action was performed on your account: ${event}. If this was not you, secure your account immediately by contacting support.`,
+      html: `<p>A security-sensitive action was performed on your account: <strong>${event}</strong>.</p><p>If this was not you, please contact support immediately to secure your account.</p>`,
+    });
+  }
+
+  async sendEmailChangeConfirmation(
+    to: string,
+    token: string,
+    newEmail: string,
+  ): Promise<void> {
+    const appUrl = this.configService.get<string>('APP_URL', 'http://localhost:3000');
+    const confirmUrl = `${appUrl}/v1/users/me/email/confirm?token=${encodeURIComponent(token)}`;
+
+    await this.transporter.sendMail({
+      from: this.configService.get<string>(
+        'SMTP_FROM',
+        '"FacilPay" <noreply@facilpay.com>',
+      ),
+      to,
+      subject: 'Confirm your new FacilPay email address',
+      text: `Please confirm your new email address (${newEmail}) by opening this link: ${confirmUrl}. This link expires in 24 hours. If you did not request this, ignore this email.`,
+      html: `<p>Please confirm your new email address <strong>${newEmail}</strong> by clicking the link below:</p><p><a href="${confirmUrl}">${confirmUrl}</a></p><p>This link expires in 24 hours.</p><p>If you did not request this change, you can safely ignore this email.</p>`,
+    });
+  }
+
+  async sendEmailChangeNotice(
+    to: string,
+    newEmail: string,
+    revertToken: string,
+  ): Promise<void> {
+    const appUrl = this.configService.get<string>('APP_URL', 'http://localhost:3000');
+    const revertUrl = `${appUrl}/v1/users/me/email/revert?token=${encodeURIComponent(revertToken)}`;
+
+    await this.transporter.sendMail({
+      from: this.configService.get<string>(
+        'SMTP_FROM',
+        '"FacilPay" <noreply@facilpay.com>',
+      ),
+      to,
+      subject: 'Your FacilPay email address is being changed',
+      text: `A request was made to change your FacilPay email address to ${newEmail}. If this was you, no action is needed. If this was NOT you, click this link to revert the change: ${revertUrl}. This link expires in 24 hours.`,
+      html: `<p>A request was made to change your FacilPay email address to <strong>${newEmail}</strong>.</p><p>If this was you, no action is needed — the change will complete once you confirm from the new address.</p><p>If this was <strong>not</strong> you, <a href="${revertUrl}">click here to cancel and revert the change</a>. This link expires in 24 hours.</p>`,
+    });
+  }
+
+  async sendDataExportReadyEmail(
+    to: string,
+    downloadToken: string,
+  ): Promise<void> {
+    const appUrl = this.configService.get<string>('APP_URL', 'http://localhost:3000');
+    const downloadUrl = `${appUrl}/v1/users/me/data-export/download?token=${encodeURIComponent(downloadToken)}`;
+
+    await this.transporter.sendMail({
+      from: this.configService.get<string>(
+        'SMTP_FROM',
+        '"FacilPay" <noreply@facilpay.com>',
+      ),
+      to,
+      subject: 'Your FacilPay personal data export is ready',
+      text: `Your personal data export is ready. Download it here: ${downloadUrl}. This link expires in 48 hours.`,
+      html: `<p>Your personal data export is ready.</p><p><a href="${downloadUrl}">Download your data</a></p><p>This link expires in 48 hours.</p>`,
+    });
+  }
 }

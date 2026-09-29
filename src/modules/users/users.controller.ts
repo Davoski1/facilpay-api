@@ -7,23 +7,31 @@ import {
   Param,
   Delete,
   UseGuards,
-  Request,
   Req,
+  Query,
+  HttpCode,
+  HttpStatus,
 } from '@nestjs/common';
-import type { Request } from 'express';
+import { Request } from 'express';
 import { UsersService } from './users.service';
+import { UserSecurityService } from './user-security.service';
 import { PaginationDto } from '../../common/dto/pagination.dto';
 import { PaginatedResult } from '../../common/interfaces';
-import { Query } from '@nestjs/common';
 import { CreateUserDto } from './dto/create-user.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
 import { UpdateRateLimitDto } from './dto/update-rate-limit.dto';
+import { ChangePasswordDto } from './dto/change-password.dto';
+import { ChangeEmailDto } from './dto/change-email.dto';
+import { LoginHistoryQueryDto } from './dto/login-history-query.dto';
+import { RequestDataExportDto } from './dto/request-data-export.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/roles.guard';
 import { Roles } from '../auth/decorators/roles.decorator';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { User } from './user.entity';
 import { UserRole } from '../../common/constants/roles';
+import { LoginHistoryService } from '../auth/login-history.service';
+import { Throttle } from '@nestjs/throttler';
 import {
   ApiBearerAuth,
   ApiBody,
@@ -34,6 +42,7 @@ import {
   ApiOkResponse,
   ApiOperation,
   ApiParam,
+  ApiQuery,
   ApiTags,
   ApiUnauthorizedResponse,
 } from '@nestjs/swagger';
@@ -41,7 +50,11 @@ import {
 @ApiTags('users')
 @Controller('v1/users')
 export class UsersController {
-  constructor(private readonly usersService: UsersService) {}
+  constructor(
+    private readonly usersService: UsersService,
+    private readonly userSecurityService: UserSecurityService,
+    private readonly loginHistoryService: LoginHistoryService,
+  ) {}
 
   @Post()
   @ApiOperation({
@@ -172,6 +185,200 @@ export class UsersController {
   })
   getMe(@CurrentUser() user: User) {
     return this.usersService.findOne(user.id);
+  }
+
+  // ── #429 ─────────────────────────────────────────────────────────────────────
+
+  @UseGuards(JwtAuthGuard)
+  @Post('me/password')
+  @HttpCode(HttpStatus.OK)
+  @Throttle({ default: { limit: 5, ttl: 900_000 } } as any) // 5 per 15 min
+  @ApiBearerAuth('bearer')
+  @ApiOperation({
+    summary: 'Change password (authenticated)',
+    description:
+      'Change the current password. Enforces strength policy and reuse history. Revokes all other sessions after a successful change. Rate-limited to 5 attempts per 15 minutes.',
+  })
+  @ApiBody({ type: ChangePasswordDto })
+  @ApiOkResponse({
+    description: 'Password changed successfully.',
+    schema: { example: { message: 'Password changed successfully. All other sessions have been revoked.' } },
+  })
+  @ApiUnauthorizedResponse({ description: 'Current password is incorrect.' })
+  async changePassword(
+    @CurrentUser() user: User,
+    @Body() dto: ChangePasswordDto,
+    @Req() req: Request,
+  ) {
+    return this.userSecurityService.changePassword(
+      user.id,
+      dto.currentPassword,
+      dto.newPassword,
+      req.ip,
+      req.headers['user-agent'],
+    );
+  }
+
+  // ── #430 ─────────────────────────────────────────────────────────────────────
+
+  @UseGuards(JwtAuthGuard)
+  @Get('me/login-history')
+  @ApiBearerAuth('bearer')
+  @ApiOperation({
+    summary: 'Login history',
+    description:
+      'Returns a paginated list of login events (successes and failures) for the last 90 days. Users see only their own history.',
+  })
+  @ApiOkResponse({
+    description: 'Paginated login events.',
+    schema: {
+      example: {
+        data: [
+          {
+            id: 'uuid',
+            success: true,
+            reason: null,
+            ipAddress: '1.2.3.4',
+            userAgent: 'Mozilla/5.0...',
+            country: 'BR',
+            createdAt: '2026-09-29T10:00:00.000Z',
+          },
+        ],
+        total: 1,
+        page: 1,
+        limit: 20,
+      },
+    },
+  })
+  @ApiUnauthorizedResponse({ description: 'Missing/invalid access token.' })
+  async getLoginHistory(
+    @CurrentUser() user: User,
+    @Query() query: LoginHistoryQueryDto,
+  ) {
+    return this.loginHistoryService.findForUser(user.id, {
+      page: query.page,
+      limit: query.limit,
+      failuresOnly: query.failuresOnly,
+    });
+  }
+
+  // ── #428 ─────────────────────────────────────────────────────────────────────
+
+  @UseGuards(JwtAuthGuard)
+  @Post('me/email')
+  @HttpCode(HttpStatus.OK)
+  @ApiBearerAuth('bearer')
+  @ApiOperation({
+    summary: 'Initiate email-address change',
+    description:
+      'Request an email-address change. A confirmation link is sent to the new address; a notice with a revert link is sent to the old address. The swap is applied only after the user clicks the confirmation link.',
+  })
+  @ApiBody({ type: ChangeEmailDto })
+  @ApiOkResponse({
+    description: 'Email change initiated.',
+    schema: {
+      example: {
+        message: 'A confirmation link has been sent to your new email address. Your current address has also been notified.',
+      },
+    },
+  })
+  @ApiConflictResponse({ description: 'New email address is already in use.' })
+  @ApiUnauthorizedResponse({ description: 'Password is incorrect.' })
+  async initiateEmailChange(
+    @CurrentUser() user: User,
+    @Body() dto: ChangeEmailDto,
+    @Req() req: Request,
+  ) {
+    return this.userSecurityService.initiateEmailChange(
+      user.id,
+      dto.newEmail,
+      dto.password,
+      req.ip,
+      req.headers['user-agent'],
+    );
+  }
+
+  @Get('me/email/confirm')
+  @ApiOperation({
+    summary: 'Confirm email-address change',
+    description:
+      'Validates the signed token sent to the new address and atomically swaps the email. Also revokes other sessions.',
+  })
+  @ApiOkResponse({
+    description: 'Email changed.',
+    schema: { example: { message: 'Email address updated successfully. All sessions have been revoked.' } },
+  })
+  async confirmEmailChange(@Query('token') token: string) {
+    return this.userSecurityService.confirmEmailChange(token);
+  }
+
+  @Get('me/email/revert')
+  @ApiOperation({
+    summary: 'Revert a pending email-address change',
+    description:
+      'Validates the signed revert token sent to the old address and cancels the pending email-change request.',
+  })
+  @ApiOkResponse({
+    description: 'Email change cancelled.',
+    schema: { example: { message: 'Email change has been cancelled. Your original address remains active.' } },
+  })
+  async revertEmailChange(@Query('token') token: string) {
+    return this.userSecurityService.revertEmailChange(token);
+  }
+
+  // ── #427 ─────────────────────────────────────────────────────────────────────
+
+  @UseGuards(JwtAuthGuard)
+  @Post('me/data-export')
+  @HttpCode(HttpStatus.OK)
+  @Throttle({ default: { limit: 3, ttl: 86_400_000 } } as any) // 3 per 24 h (additional throttler layer)
+  @ApiBearerAuth('bearer')
+  @ApiOperation({
+    summary: 'Request personal data export (GDPR)',
+    description:
+      'Enqueues a personal-data export. Requires step-up authentication (password). Rate-limited to one export per 24 h. A time-limited download link is emailed to the account address.',
+  })
+  @ApiBody({ type: RequestDataExportDto })
+  @ApiOkResponse({
+    description: 'Export ready, link emailed.',
+    schema: {
+      example: {
+        message: 'Your data export has been prepared. A download link has been sent to your email address. The link expires in 48 hours.',
+      },
+    },
+  })
+  @ApiUnauthorizedResponse({ description: 'Password is incorrect.' })
+  async requestDataExport(
+    @CurrentUser() user: User,
+    @Body() dto: RequestDataExportDto,
+    @Req() req: Request,
+  ) {
+    return this.userSecurityService.requestDataExport(
+      user.id,
+      dto.password,
+      req.ip,
+      req.headers['user-agent'],
+    );
+  }
+
+  @Get('me/data-export/download')
+  @ApiOperation({
+    summary: 'Download personal data export',
+    description:
+      'Downloads the redacted personal-data JSON using the signed token emailed after a successful export request. The token expires after 48 hours. Never includes passwords, 2FA secrets, or other credentials.',
+  })
+  @ApiOkResponse({
+    description: 'Redacted personal-data JSON.',
+    schema: {
+      example: {
+        exportedAt: '2026-09-29T10:00:00.000Z',
+        profile: { id: 'uuid', email: 'jane@example.com' },
+        sessions: [],
+      },
+    },
+  })
+  async downloadDataExport(@Query('token') token: string) {
+    return this.userSecurityService.downloadDataExport(token);
   }
 
   @UseGuards(JwtAuthGuard, RolesGuard)
