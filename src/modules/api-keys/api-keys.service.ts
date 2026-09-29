@@ -1,10 +1,11 @@
 import {
   Injectable,
+  Logger,
   NotFoundException,
   UnauthorizedException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, LessThan, Between } from 'typeorm';
+import { Repository, LessThan } from 'typeorm';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { ConfigService } from '@nestjs/config';
 import { createHash, randomBytes } from 'crypto';
@@ -16,9 +17,13 @@ import { GetApiKeyUsageDto } from './dto/get-api-key-usage.dto';
 import { PaginatedResult } from '../../common/interfaces/paginated-result.interface';
 import { AuditLogsService } from '../audit-logs/audit-logs.service';
 import { isIpAllowed } from '../merchants/ip-utils';
+import { User } from '../users/user.entity';
+import { EmailNotificationService } from '../notifications/email-notification.service';
 
 @Injectable()
 export class ApiKeysService {
+  private readonly logger = new Logger(ApiKeysService.name);
+
   constructor(
     @InjectRepository(ApiKey)
     private readonly apiKeyRepository: Repository<ApiKey>,
@@ -26,6 +31,7 @@ export class ApiKeysService {
     private readonly apiKeyUsageRepository: Repository<ApiKeyUsage>,
     private readonly configService: ConfigService,
     private readonly auditLogsService: AuditLogsService,
+    private readonly emailNotificationService: EmailNotificationService,
   ) {}
 
   async create(
@@ -292,5 +298,103 @@ export class ApiKeysService {
         `Pruned ${result.affected} API key usage records older than ${retentionDays} days`,
       );
     }
+  }
+
+  @Cron(CronExpression.EVERY_DAY_AT_2AM)
+  async warnAboutExpiringKeys(): Promise<void> {
+    await this.sendExpiryWarnings();
+  }
+
+  async sendExpiryWarnings(now = new Date()): Promise<number> {
+    const today = new Date(
+      Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()),
+    );
+    const appUrl =
+      this.configService.get<string>('APP_URL') ?? 'http://localhost:3000';
+    const apiKeysUrl =
+      this.configService.get<string>('API_KEYS_URL') ??
+      `${appUrl}/settings/api-keys`;
+    let queuedWarnings = 0;
+
+    for (const daysUntilExpiry of [14, 7, 1]) {
+      const start = new Date(today);
+      start.setUTCDate(start.getUTCDate() + daysUntilExpiry);
+      const end = new Date(start);
+      end.setUTCDate(end.getUTCDate() + 1);
+
+      const candidates = await this.apiKeyRepository
+        .createQueryBuilder('apiKey')
+        .innerJoin(User, 'owner', 'owner.id = apiKey.userId')
+        .select('apiKey.id', 'id')
+        .addSelect('apiKey.userId', 'userId')
+        .addSelect('apiKey.name', 'name')
+        .addSelect('apiKey.keyPrefix', 'keyPrefix')
+        .addSelect('apiKey.expiresAt', 'expiresAt')
+        .addSelect('apiKey.lastExpiryWarningDays', 'lastExpiryWarningDays')
+        .addSelect('owner.email', 'ownerEmail')
+        .where('apiKey.isActive = true')
+        .andWhere('apiKey.expiresAt >= :start AND apiKey.expiresAt < :end', {
+          start,
+          end,
+        })
+        .andWhere('apiKey.lastExpiryWarningDays IS DISTINCT FROM :days', {
+          days: daysUntilExpiry,
+        })
+        .getRawMany<{
+          id: string;
+          userId: string;
+          name: string;
+          keyPrefix: string;
+          expiresAt: Date;
+          lastExpiryWarningDays: number | null;
+          ownerEmail: string;
+        }>();
+
+      for (const key of candidates) {
+        const claim = await this.apiKeyRepository
+          .createQueryBuilder()
+          .update(ApiKey)
+          .set({ lastExpiryWarningDays: daysUntilExpiry })
+          .where('id = :id', { id: key.id })
+          .andWhere('"isActive" = true')
+          .andWhere('"lastExpiryWarningDays" IS DISTINCT FROM :days', {
+            days: daysUntilExpiry,
+          })
+          .execute();
+        if (!claim.affected) continue;
+
+        const rotateUrl = new URL(apiKeysUrl, appUrl);
+        rotateUrl.searchParams.set('rotate', key.id);
+        try {
+          await this.emailNotificationService.sendApiKeyExpiryWarning({
+            to: key.ownerEmail,
+            keyName: key.name,
+            keyPrefix: key.keyPrefix,
+            expiresAt: new Date(key.expiresAt),
+            daysUntilExpiry,
+            rotateUrl: rotateUrl.toString(),
+            apiKeyId: key.id,
+          });
+          queuedWarnings += 1;
+        } catch (error) {
+          await this.apiKeyRepository
+            .createQueryBuilder()
+            .update(ApiKey)
+            .set({ lastExpiryWarningDays: key.lastExpiryWarningDays })
+            .where('id = :id', { id: key.id })
+            .andWhere('"lastExpiryWarningDays" = :days', {
+              days: daysUntilExpiry,
+            })
+            .execute();
+          this.logger.error(
+            `Could not queue expiry warning for API key ${key.id}: ${
+              error instanceof Error ? error.message : String(error)
+            }`,
+          );
+        }
+      }
+    }
+
+    return queuedWarnings;
   }
 }
