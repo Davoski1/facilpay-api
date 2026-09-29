@@ -10,15 +10,19 @@ import { JwtAuthGuard } from './guards/jwt-auth.guard';
 import { RolesGuard } from './roles.guard';
 import { PermissionsGuard } from './guards/permissions.guard';
 import { UsersModule } from '../users/users.module';
+import { SessionsModule } from '../sessions/sessions.module';
 import { JwtStrategy } from './jwt.strategy';
 import { RefreshToken } from './entities/refresh-token.entity';
 import { PasswordResetToken } from './entities/password-reset-token.entity';
 import { PasswordHistory } from './entities/password-history.entity';
 import { Role } from './entities/role.entity';
+import { LoginEvent } from './entities/login-event.entity';
 import { MailService } from './mail/mail.service';
 import { PasswordStrengthService } from './password-strength.service';
 import { PasswordHistoryService } from './password-history.service';
+import { LoginHistoryService } from './login-history.service';
 import { AuditLogsModule } from '../audit-logs/audit-logs.module';
+import { User } from '../users/user.entity';
 
 @Module({
   imports: [
@@ -26,7 +30,7 @@ import { AuditLogsModule } from '../audit-logs/audit-logs.module';
     PassportModule,
     HttpModule,
     SessionsModule,
-    TypeOrmModule.forFeature([RefreshToken, PasswordResetToken, PasswordHistory, Role]),
+    TypeOrmModule.forFeature([RefreshToken, PasswordResetToken, PasswordHistory, Role, LoginEvent, User]),
     AuditLogsModule,
     JwtModule.registerAsync({
       imports: [ConfigModule],
@@ -38,7 +42,26 @@ import { AuditLogsModule } from '../audit-logs/audit-logs.module';
     }),
   ],
   controllers: [AuthController],
-  providers: [AuthService, JwtStrategy, JwtAuthGuard, RolesGuard, PermissionsGuard, MailService, PasswordStrengthService, PasswordHistoryService],
-  exports: [AuthService, MailService, JwtAuthGuard, RolesGuard, PermissionsGuard, PasswordStrengthService, PasswordHistoryService],
+  providers: [
+    AuthService,
+    JwtStrategy,
+    JwtAuthGuard,
+    RolesGuard,
+    PermissionsGuard,
+    MailService,
+    PasswordStrengthService,
+    PasswordHistoryService,
+    LoginHistoryService,
+  ],
+  exports: [
+    AuthService,
+    MailService,
+    JwtAuthGuard,
+    RolesGuard,
+    PermissionsGuard,
+    PasswordStrengthService,
+    PasswordHistoryService,
+    LoginHistoryService,
+  ],
 })
 export class AuthModule {}
