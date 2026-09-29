@@ -149,8 +149,8 @@ describe('AdminMerchantsService', () => {
       { isActive: true },
     );
     expect(listQuery.andWhere).toHaveBeenCalledWith(
-      'onboarding.status = :onboardingStatus',
-      { onboardingStatus: 'approved' },
+      '(onboarding.status = :onboardingStatus OR (onboarding.merchantId IS NULL AND :onboardingStatus = :pendingStatus))',
+      { onboardingStatus: 'approved', pendingStatus: 'pending' },
     );
     expect(listQuery.skip).toHaveBeenCalledWith(10);
     expect(result).toMatchObject({ total: 1, page: 2, limit: 10 });
@@ -160,5 +160,22 @@ describe('AdminMerchantsService', () => {
       refundRate30d: 50,
       disputeRate30d: 100,
     });
+  });
+
+  it('treats a merchant without an onboarding row as pending', async () => {
+    listQuery.getRawMany.mockResolvedValue([
+      {
+        id: 'merchant-1',
+        email: 'owner@example.com',
+        isActive: true,
+        createdAt: new Date('2026-01-01T00:00:00Z'),
+        businessName: null,
+        onboardingStatus: null,
+      },
+    ]);
+
+    const result = await service.list({ page: 1, limit: 25 });
+
+    expect(result.data[0].onboardingStatus).toBe('pending');
   });
 });

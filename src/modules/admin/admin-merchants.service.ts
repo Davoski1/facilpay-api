@@ -5,7 +5,10 @@ import { AuditLogsService } from '../audit-logs/audit-logs.service';
 import { Dispute } from '../payments/dispute.entity';
 import { Payment, PaymentStatus } from '../payments/payment.entity';
 import { Refund } from '../payments/refund.entity';
-import { MerchantOnboarding } from '../onboarding/merchant-onboarding.entity';
+import {
+  MerchantOnboarding,
+  OnboardingStatus,
+} from '../onboarding/merchant-onboarding.entity';
 import { Session } from '../auth/entities/session.entity';
 import { User } from '../users/user.entity';
 import { UserRole } from '../../common/constants/roles';
@@ -71,9 +74,13 @@ export class AdminMerchantsService {
       });
     }
     if (dto.onboardingStatus) {
-      query.andWhere('onboarding.status = :onboardingStatus', {
-        onboardingStatus: dto.onboardingStatus,
-      });
+      query.andWhere(
+        '(onboarding.status = :onboardingStatus OR (onboarding.merchantId IS NULL AND :onboardingStatus = :pendingStatus))',
+        {
+          onboardingStatus: dto.onboardingStatus,
+          pendingStatus: OnboardingStatus.PENDING,
+        },
+      );
     }
 
     const page = dto.page ?? 1;
@@ -103,7 +110,8 @@ export class AdminMerchantsService {
         email: merchant.email,
         createdAt: merchant.createdAt,
         status: merchant.isActive ? 'active' : 'inactive',
-        onboardingStatus: merchant.onboardingStatus,
+        onboardingStatus:
+          merchant.onboardingStatus ?? OnboardingStatus.PENDING,
         ...metrics.get(merchant.id),
       })),
       total,
@@ -145,7 +153,7 @@ export class AdminMerchantsService {
       email: merchant.email,
       createdAt: merchant.createdAt,
       status: merchant.isActive ? 'active' : 'inactive',
-      onboardingStatus: onboarding?.status ?? null,
+      onboardingStatus: onboarding?.status ?? OnboardingStatus.PENDING,
       ...metrics,
     };
   }
