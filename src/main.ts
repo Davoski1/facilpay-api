@@ -1,3 +1,4 @@
+import { initializeTracing } from './tracing';
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
@@ -5,6 +6,9 @@ import { AppLogger } from './modules/logger/logger.service';
 import { ValidationPipe, UnprocessableEntityException } from '@nestjs/common';
 import { CorsConfigService } from './modules/cors/cors-config.service';
 import { parseTrustedProxyList } from './modules/merchants/ip-utils';
+
+// Initialize tracing before app bootstrap
+initializeTracing();
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule, { rawBody: true });
