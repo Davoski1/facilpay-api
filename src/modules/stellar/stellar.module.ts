@@ -9,9 +9,10 @@ import { MultiSigTransaction } from './entities/multi-sig-transaction.entity';
 import { StellarAsset } from './entities/stellar-asset.entity';
 import { StellarController } from './stellar.controller';
 import { WebhooksModule } from '../webhooks/webhooks.module';
+import { AuthModule } from '../auth/auth.module';
 
 @Module({
-  imports: [ConfigModule, TypeOrmModule.forFeature([Payment, MultiSigTransaction, StellarAsset]), forwardRef(() => WebhooksModule)],
+  imports: [ConfigModule, TypeOrmModule.forFeature([Payment, MultiSigTransaction, StellarAsset]), forwardRef(() => WebhooksModule), AuthModule],
   controllers: [StellarController],
   providers: [StellarService, StellarHorizonStreamService, StellarHorizonClientService],
   exports: [StellarService, StellarHorizonStreamService, StellarHorizonClientService],

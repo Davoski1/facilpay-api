@@ -5,6 +5,7 @@ import { UsersController } from './users.controller';
 import { User } from './user.entity';
 import { AuditLogsModule } from '../audit-logs/audit-logs.module';
 import { RefreshToken } from '../auth/entities/refresh-token.entity';
+import { MailService } from '../auth/mail/mail.service';
 
 @Module({
   imports: [TypeOrmModule.forFeature([User, RefreshToken]), AuditLogsModule],

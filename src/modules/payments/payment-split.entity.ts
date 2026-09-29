@@ -11,6 +11,7 @@ export enum PaymentSplitStatus {
   PENDING = 'PENDING',
   COMPLETED = 'COMPLETED',
   FAILED = 'FAILED',
+  CLAIMABLE = 'CLAIMABLE',
 }
 
 @Entity('payment_splits')
@@ -40,6 +41,9 @@ export class PaymentSplit {
 
   @Column({ nullable: true })
   stellarTransactionHash: string | null = null;
+
+  @Column({ type: 'varchar', nullable: true })
+  claimableBalanceId: string | null = null;
 
   @Column({ nullable: true })
   failureReason: string | null = null;

@@ -7,6 +7,7 @@ import { AppLogger } from '../logger/logger.service';
 import { Logger } from 'pino';
 import { StellarHorizonStreamService } from '../stellar/stellar-horizon-stream.service';
 import { StellarHorizonClientService } from '../stellar/stellar-horizon-client.service';
+import { StellarService } from '../stellar/stellar.service';
 import * as os from 'os';
 
 interface HealthCheckResult {
@@ -33,6 +34,12 @@ interface HealthCheckResult {
       errorCount: number;
       lastChecked: string;
     }>;
+    stellarDistributionAccount: {
+      status: 'unknown' | 'healthy' | 'degraded';
+      message: string;
+      lowAssets: string[];
+      checkedAt: string | null;
+    };
     queue: {
       status: 'healthy' | 'unhealthy';
       message: string;
@@ -56,6 +63,7 @@ export class HealthService {
     private readonly dataSource: DataSource,
     private readonly horizonStreamService: StellarHorizonStreamService,
     private readonly horizonClientService: StellarHorizonClientService,
+    private readonly stellarService: StellarService,
     @InjectQueue('webhooks') private readonly webhooksQueue: Queue,
     appLogger: AppLogger,
   ) {
@@ -76,19 +84,22 @@ export class HealthService {
     const stellarStatus = await this.checkStellarNetwork();
     const horizonStreamStatus = this.checkHorizonStream();
     const horizonUrlsStatus = this.horizonClientService.getStatus();
+    const distributionAccountStatus = this.stellarService.getLowBalanceHealth();
     const queueStatus = await this.checkQueue();
     const systemStatus = this.checkSystem();
 
     const isHealthy =
       dbStatus.status === 'healthy' &&
       stellarStatus.status === 'healthy' &&
-      queueStatus.status === 'healthy';
+      queueStatus.status === 'healthy' &&
+      distributionAccountStatus.status !== 'degraded';
 
     const isDegraded =
       !isHealthy &&
       (dbStatus.status === 'healthy' ||
         stellarStatus.status === 'healthy' ||
-        queueStatus.status === 'healthy');
+        queueStatus.status === 'healthy' ||
+        distributionAccountStatus.status === 'degraded');
 
     const overallStatus = isHealthy ? 'ok' : isDegraded ? 'degraded' : 'unhealthy';
     const statusCode = isHealthy ? 200 : isDegraded ? 200 : 503;
@@ -103,6 +114,7 @@ export class HealthService {
         stellar: stellarStatus,
         horizonStream: horizonStreamStatus,
         horizonUrls: horizonUrlsStatus,
+        stellarDistributionAccount: distributionAccountStatus,
         queue: queueStatus,
         system: systemStatus,
       },

@@ -114,7 +114,7 @@ describe('PaymentsService - Transactions', () => {
         },
         {
           provide: StellarService,
-          useValue: { sendPayment: jest.fn() },
+          useValue: { sendPayment: jest.fn(), sendPayout: jest.fn() },
         },
         {
           provide: ConfigService,

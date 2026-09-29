@@ -16,7 +16,7 @@ import {
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { ConfigService } from '@nestjs/config';
 import { Payment, PaymentStatus } from './payment.entity';
-import { Refund, RefundReasonCode } from './refund.entity';
+import { Refund, RefundReasonCode, RefundStatus } from './refund.entity';
 import { Dispute, DisputeStatus } from './dispute.entity';
 import { PaymentSplit, PaymentSplitStatus } from './payment-split.entity';
 import { MerchantFeeConfig } from './merchant-fee-config.entity';
@@ -258,6 +258,7 @@ export class PaymentsService {
   async create(
     createPaymentDto: CreatePaymentDto,
     recurringPaymentId?: string,
+    authenticatedMerchantId?: string,
   ): Promise<Payment> {
     const queryRunner = this.dataSource.createQueryRunner();
 
@@ -265,7 +266,7 @@ export class PaymentsService {
       await queryRunner.connect();
       await queryRunner.startTransaction();
 
-      let merchantId = createPaymentDto.merchantId;
+      let merchantId = authenticatedMerchantId ?? createPaymentDto.merchantId;
       if (createPaymentDto.customerId) {
         const expectedMerchantId =
           authenticatedMerchantId ?? createPaymentDto.merchantId;
@@ -289,6 +290,9 @@ export class PaymentsService {
 
       // Validate merchantId if provided
       await this.validateMerchantId(merchantId);
+      if (merchantId) {
+        await this.usersService.assertMerchantActive(merchantId);
+      }
 
       await this.ensurePaymentLimits({ ...createPaymentDto, merchantId });
       const fee = await this.calculateFee(
@@ -361,7 +365,11 @@ export class PaymentsService {
 
       const resolvedPaymentDtos = await Promise.all(
         createPaymentDtos.map(async (createPaymentDto) => {
-          if (!createPaymentDto.customerId) return createPaymentDto;
+          if (!createPaymentDto.customerId) {
+            return authenticatedMerchantId
+              ? { ...createPaymentDto, merchantId: authenticatedMerchantId }
+              : createPaymentDto;
+          }
 
           const expectedMerchantId =
             authenticatedMerchantId ?? createPaymentDto.merchantId;
@@ -402,6 +410,11 @@ export class PaymentsService {
 
       for (const merchantId of uniqueMerchantIds) {
         await this.validateMerchantId(merchantId);
+        await this.usersService.assertMerchantActive(merchantId);
+      }
+
+      if (authenticatedMerchantId) {
+        await this.usersService.assertMerchantActive(authenticatedMerchantId);
       }
 
       const paymentPayloads = await Promise.all(
@@ -1049,6 +1062,28 @@ export class PaymentsService {
           amount: refund.amount,
           reason: refund.reason,
           initiatedBy: refund.initiatedBy,
+          status: refund.status,
+          stellarTransactionHash: refund.stellarTransactionHash,
+          claimableBalanceId: refund.claimableBalanceId,
+        },
+      });
+    }
+
+    const splits = await this.paymentSplitRepository.find({
+      where: { paymentId },
+      order: { createdAt: 'ASC' },
+    });
+    for (const split of splits) {
+      events.push({
+        type: 'payment.split_processed',
+        timestamp: split.updatedAt,
+        data: {
+          splitId: split.id,
+          status: split.status,
+          amount: split.amount,
+          recipientAddress: split.recipientAddress,
+          stellarTransactionHash: split.stellarTransactionHash,
+          claimableBalanceId: split.claimableBalanceId,
         },
       });
     }
@@ -1211,6 +1246,32 @@ export class PaymentsService {
         refundAmount,
       );
       await queryRunner.commitTransaction();
+
+      if (refundDto.stellarDestination) {
+        try {
+          const stellarResult = await this.stellarService.sendPayout({
+            destination: refundDto.stellarDestination,
+            amount: String(refundAmount),
+            assetCode: payment.currency,
+            merchantId: payment.merchantId ?? undefined,
+          });
+          savedRefund.status = stellarResult?.status === 'claimable'
+            ? RefundStatus.CLAIMABLE
+            : stellarResult?.status === 'pending_signatures'
+              ? RefundStatus.PENDING
+              : RefundStatus.COMPLETED;
+          savedRefund.stellarTransactionHash = stellarResult?.hash ?? null;
+          savedRefund.claimableBalanceId = stellarResult?.claimableBalanceId ?? null;
+          await this.refundRepository.save(savedRefund);
+        } catch (stellarError) {
+          savedRefund.status = RefundStatus.FAILED;
+          await this.refundRepository.save(savedRefund);
+          this.logger.error(
+            `Stellar refund transfer failed for refund ${savedRefund.id}: ${stellarError instanceof Error ? stellarError.message : String(stellarError)}`,
+          );
+        }
+      }
+
       this.logger.info(
         `Refund processed: ${savedRefund.id} for payment ${id}, amount: ${refundAmount}`,
       );
@@ -1508,17 +1569,22 @@ export class PaymentsService {
     if (splits.length === 0) return;
 
     let failedCount = 0;
+    let claimableCount = 0;
 
     for (const split of splits) {
       try {
-        const result = await this.stellarService.sendPayment(
-          split.recipientAddress,
-          String(split.amount),
-          undefined,
-          payment.merchantId ?? undefined,
-        );
+        const result = await this.stellarService.sendPayout({
+          destination: split.recipientAddress,
+          amount: String(split.amount),
+          assetCode: payment.currency,
+          merchantId: payment.merchantId ?? undefined,
+        });
 
-        split.status = PaymentSplitStatus.COMPLETED;
+        split.status = result?.status === 'claimable'
+          ? PaymentSplitStatus.CLAIMABLE
+          : PaymentSplitStatus.COMPLETED;
+        split.claimableBalanceId = result?.claimableBalanceId ?? null;
+        if (split.status === PaymentSplitStatus.CLAIMABLE) claimableCount += 1;
         split.stellarTransactionHash = result?.hash ?? null;
       } catch (error) {
         failedCount += 1;
@@ -1549,6 +1615,13 @@ export class PaymentsService {
             paymentId: payment.id,
             totalSplits: splits.length,
             failedSplits: failedCount,
+            claimableSplits: claimableCount,
+            splits: splits.map((split) => ({
+              splitId: split.id,
+              status: split.status,
+              claimableBalanceId: split.claimableBalanceId,
+              stellarTransactionHash: split.stellarTransactionHash,
+            })),
             status: payment.status,
           },
         )

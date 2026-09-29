@@ -27,6 +27,7 @@ import { PaymentStatus } from '../payments/payment.entity';
 import { SettlementStatus } from '../settlements/entities/settlement.entity';
 import { PaginatedResult } from '../../common/interfaces/paginated-result.interface';
 import { fromUnits, toUnits } from './payout-amount.util';
+import { UsersService } from '../users/users.service';
 
 export const PAYOUTS_QUEUE = 'payouts';
 
@@ -63,6 +64,7 @@ export class PayoutsService {
     private readonly webhooksService: WebhooksService,
     private readonly eventsService: EventsService,
     private readonly auditLogsService: AuditLogsService,
+    private readonly usersService: UsersService,
     configService: ConfigService,
   ) {
     this.defaultDailyLimit = String(
@@ -78,6 +80,7 @@ export class PayoutsService {
     userAgent?: string,
   ): Promise<Payout> {
     this.authService.validateStepUpToken(stepUpToken, merchantId);
+    await this.usersService.assertMerchantActive(merchantId);
 
     const currency = dto.currency.toUpperCase();
     const amountUnits = toUnits(dto.amount);
@@ -240,6 +243,7 @@ export class PayoutsService {
     await this.dispatchEvent(payout, 'payout.submitted');
 
     try {
+      await this.usersService.assertMerchantActive(payout.merchantId);
       const result: any = await this.stellarService.sendPayout({
         destination: payout.destination,
         amount: payout.amount,

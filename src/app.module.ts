@@ -29,6 +29,7 @@ import { EventsModule } from './modules/events/events.module';
 import { ReportsModule } from './modules/reports/reports.module';
 import { PayoutsModule } from './modules/payouts/payouts.module';
 import { AnalyticsModule } from './modules/analytics/analytics.module';
+import { AdminMerchantsModule } from './modules/admin/admin-merchants.module';
 
 @Module({
   imports: [
@@ -64,6 +65,7 @@ import { AnalyticsModule } from './modules/analytics/analytics.module';
     ReportsModule,
     PayoutsModule,
     AnalyticsModule,
+    AdminMerchantsModule,
   ],
   controllers: [AppController],
   providers: [AppService],
