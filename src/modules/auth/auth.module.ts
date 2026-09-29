@@ -39,6 +39,6 @@ import { AuditLogsModule } from '../audit-logs/audit-logs.module';
   ],
   controllers: [AuthController],
   providers: [AuthService, JwtStrategy, JwtAuthGuard, RolesGuard, PermissionsGuard, MailService, PasswordStrengthService, PasswordHistoryService],
-  exports: [AuthService, JwtAuthGuard, RolesGuard, PermissionsGuard, PasswordStrengthService, PasswordHistoryService],
+  exports: [AuthService, MailService, JwtAuthGuard, RolesGuard, PermissionsGuard, PasswordStrengthService, PasswordHistoryService],
 })
 export class AuthModule {}

@@ -49,6 +49,28 @@ conventions we follow, and what CI will check on your pull request.
 
 The server listens on port `3000` by default (override with `PORT`).
 
+## Docker setup
+
+To run the whole stack (API, Postgres, Redis) with hot reload instead of a
+local Node process:
+
+```bash
+docker compose up --build
+```
+
+The API is available at http://localhost:3000. Run migrations inside the
+container:
+
+```bash
+docker compose run --rm api migrate
+```
+
+Stop and remove containers, networks, and volumes:
+
+```bash
+docker compose down -v
+```
+
 ## Checks before you push
 
 CI runs exactly these jobs (see `.github/workflows/ci.yml`). Run them locally
@@ -61,7 +83,8 @@ before opening a PR:
 | `npm test` | Unit tests (Jest) |
 | `npm run test:e2e` | End-to-end tests (via Docker Compose) |
 
-The e2e suite runs through `docker compose -f docker-compose.test.yml run --rm api test:e2e`.
+The e2e suite runs through `docker compose -f docker-compose.test.yml run --rm api test:e2e`
+(alias: `npm run docker:test:e2e`).
 
 ## Branch naming
 
@@ -106,11 +129,14 @@ npm run typeorm -- migration:run
 
 ## Pull request checklist
 
-Before requesting review, confirm all of the following:
+Before requesting review, confirm all of the following. The first four items
+mirror the jobs CI runs on every PR:
 
-- [ ] Tests added or updated for the change (`npm test` passes)
+- [ ] `npm run lint` passes (CI job: **Lint**)
+- [ ] `npm run build` passes (CI job: **Build**)
+- [ ] Tests added or updated for the change, and `npm test` passes (CI job: **Unit Tests**)
+- [ ] `npm run test:e2e` passes (CI job: **E2E Tests**, run via Docker Compose)
 - [ ] Documentation updated if the change affects public behavior
 - [ ] A migration is included for any entity/schema change
 - [ ] Swagger decorators (`@ApiOperation`, `@ApiProperty`, ...) added for any new or changed endpoint
-- [ ] `npm run lint` and `npm run build` pass
 - [ ] Commit messages follow Conventional Commits

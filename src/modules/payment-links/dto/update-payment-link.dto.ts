@@ -7,7 +7,6 @@ import {
   Min,
   MaxLength,
   IsPositive,
-  IsBoolean,
   IsArray,
   ValidateNested,
   IsEnum,
@@ -18,6 +17,7 @@ import {
 import { ApiPropertyOptional } from '@nestjs/swagger';
 import { IsISO4217CurrencyCode } from '../../../common/validators/is-iso4217-currency-code.validator';
 import { Type } from 'class-transformer';
+import { IsSafeHttpsUrl } from '../../../common/validators/is-safe-https-url.validator';
 
 export class CustomFieldDto {
   @IsString()
@@ -114,5 +114,17 @@ export class UpdatePaymentLinkDto {
   @Type(() => CustomFieldDto)
   @ApiPropertyOptional({ description: 'Custom fields to collect (max 5)', type: [CustomFieldDto] })
   customFields?: CustomFieldDto[];
+
+  @IsSafeHttpsUrl()
+  @MaxLength(2048)
+  @IsOptional()
+  @ApiPropertyOptional({ example: 'https://merchant.example.com/paid?payment_id={PAYMENT_ID}', maxLength: 2048 })
+  successUrl?: string | null;
+
+  @IsSafeHttpsUrl()
+  @MaxLength(2048)
+  @IsOptional()
+  @ApiPropertyOptional({ example: 'https://merchant.example.com/cancelled', maxLength: 2048 })
+  cancelUrl?: string | null;
 }
 

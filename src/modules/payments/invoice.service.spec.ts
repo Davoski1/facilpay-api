@@ -5,6 +5,7 @@ import { NotFoundException, ConflictException } from '@nestjs/common';
 import { InvoiceService } from './invoice.service';
 import { Payment, PaymentStatus } from './payment.entity';
 import { AppLogger } from '../logger/logger.service';
+import { MerchantsService } from '../merchants/merchants.service';
 
 describe('InvoiceService', () => {
   let service: InvoiceService;
@@ -48,6 +49,10 @@ describe('InvoiceService', () => {
             findOneBy: jest.fn(),
             save: jest.fn(),
           },
+        },
+        {
+          provide: MerchantsService,
+          useValue: { getBrandingWithDefaults: jest.fn() },
         },
         {
           provide: AppLogger,
@@ -140,7 +145,7 @@ describe('InvoiceService', () => {
   });
 
   describe('streamInvoicePdf', () => {
-    it('should set Content-Type and Content-Disposition headers and pipe the PDF', () => {
+    it('should set Content-Type and Content-Disposition headers and pipe the PDF', async () => {
       const payment = makePayment({ invoiceToken: 'd'.repeat(64) });
 
       // Provide a minimal writable stream so doc.pipe(res) does not throw
@@ -152,7 +157,7 @@ describe('InvoiceService', () => {
       }) as unknown as import('express').Response;
 
       // Should not throw
-      expect(() => service.streamInvoicePdf(payment, mockRes)).not.toThrow();
+      await expect(service.streamInvoicePdf(payment, mockRes)).resolves.toBeUndefined();
 
       expect(setHeaderMock).toHaveBeenCalledWith(
         'Content-Type',

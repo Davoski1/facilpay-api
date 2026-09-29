@@ -4,6 +4,8 @@ import { HealthService } from './health.service';
 import { DataSource } from 'typeorm';
 import { AppLogger } from '../logger/logger.service';
 import { StellarHorizonStreamService } from '../stellar/stellar-horizon-stream.service';
+import { StellarHorizonClientService } from '../stellar/stellar-horizon-client.service';
+import { StellarService } from '../stellar/stellar.service';
 
 describe('HealthService', () => {
   let service: HealthService;
@@ -42,6 +44,21 @@ describe('HealthService', () => {
         {
           provide: StellarHorizonStreamService,
           useValue: mockHorizonStreamService,
+        },
+        {
+          provide: StellarHorizonClientService,
+          useValue: { getStatus: jest.fn().mockReturnValue([]) },
+        },
+        {
+          provide: StellarService,
+          useValue: {
+            getLowBalanceHealth: jest.fn().mockReturnValue({
+              status: 'healthy',
+              message: 'All configured distribution-account balances are above threshold',
+              lowAssets: [],
+              checkedAt: null,
+            }),
+          },
         },
         {
           provide: getQueueToken('webhooks'),
@@ -153,5 +170,22 @@ describe('HealthService', () => {
         message: 'Queue client unavailable',
       });
     });
+  });
+
+  it('returns degraded readiness when a configured distribution balance is low', async () => {
+    global.fetch = jest.fn().mockResolvedValue({ ok: true, status: 200 });
+    const stellarService = (service as any).stellarService as StellarService;
+    jest.spyOn(stellarService, 'getLowBalanceHealth').mockReturnValue({
+      status: 'degraded',
+      message: 'Below threshold: XLM',
+      lowAssets: ['XLM'],
+      checkedAt: new Date().toISOString(),
+    });
+
+    const result = await service.check();
+
+    expect(result.status).toBe('degraded');
+    expect(result.statusCode).toBe(200);
+    expect(result.services.stellarDistributionAccount.lowAssets).toEqual(['XLM']);
   });
 });

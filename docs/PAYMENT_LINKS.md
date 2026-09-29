@@ -18,12 +18,16 @@ Request body:
   "currency": "USD",
   "description": "Invoice #42",
   "expiresAt": "2026-12-31T23:59:59Z",
-  "maxCompletions": 1
+  "maxCompletions": 1,
+  "successUrl": "https://merchant.example.com/paid?payment_id={PAYMENT_ID}",
+  "cancelUrl": "https://merchant.example.com/cancelled"
 }
 ```
 
 - `amount` and `currency` are required.
 - `description`, `expiresAt`, and `maxCompletions` are optional. Set `maxCompletions` to `1` for a single-use link; the link deactivates after that many successful payments.
+- `successUrl` and `cancelUrl` are optional HTTPS URLs (maximum 2048 characters). Local/private IP destinations and URL credentials are rejected.
+- Use `{PAYMENT_ID}` in `successUrl` where the completed payment ID should be inserted. The payment response returns the URL with the placeholder replaced.
 - A unique 32-character hex `token` is generated server-side and returned in the response; it forms the public URL segment (e.g. `/v1/payment-links/:token`).
 
 Response: the created `PaymentLink`, including `token`, `views: 0`, `completions: 0`, and `isActive: true`.
@@ -61,6 +65,8 @@ Response:
 - Increments the link's `views` counter by 1 on every call, including repeat visits.
 - Returns `404 Not Found` if the token doesn't match any link.
 - Returns `410 Gone` if the link has been deactivated (`isActive: false`), has passed its `expiresAt`, or has reached its `maxCompletions`.
+- Includes configured `successUrl` and `cancelUrl` values in the public link response.
+- Redeem with `couponCode` to receive a `couponPreview` containing the discount and final amount. Include the same code and `paymentLinkId` in payment creation; the API recalculates the discount and reserves limited redemptions transactionally.
 
 ### `PATCH /v1/payment-links/:id`
 
@@ -72,6 +78,8 @@ Editable fields (all optional — only the fields present in the body are change
 - `currency`
 - `description`
 - `expiresAt`
+- `successUrl`
+- `cancelUrl`
 
 Returns `404 Not Found` if the link doesn't exist.
 
