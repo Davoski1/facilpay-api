@@ -31,6 +31,8 @@ import { PayoutsModule } from './modules/payouts/payouts.module';
 import { AnalyticsModule } from './modules/analytics/analytics.module';
 import { InvoicesModule } from './modules/invoices/invoices.module';
 import { CouponsModule } from './modules/coupons/coupons.module';
+import { MetricsModule } from './modules/metrics/metrics.module';
+import { HttpMetricsMiddleware } from './modules/metrics/http-metrics.middleware';
 
 @Module({
   imports: [
@@ -47,6 +49,7 @@ import { CouponsModule } from './modules/coupons/coupons.module';
     ThrottlerConfigModule,
     LoggerModule,
     CorsModule,
+    MetricsModule,
     DatabaseModule,
     HealthModule,
     UsersModule,
@@ -74,6 +77,6 @@ import { CouponsModule } from './modules/coupons/coupons.module';
 })
 export class AppModule implements NestModule {
   configure(consumer: MiddlewareConsumer) {
-    consumer.apply(SecurityHeadersMiddleware, HttpLoggerMiddleware).forRoutes('*');
+    consumer.apply(SecurityHeadersMiddleware, HttpLoggerMiddleware, HttpMetricsMiddleware).forRoutes('*');
   }
 }
