@@ -9,7 +9,11 @@ import {
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { randomBytes } from 'crypto';
+import { createHash, randomBytes } from 'crypto';
 import { PaymentLink, RESERVED_SLUGS, CustomField } from './payment-link.entity';
+import { PaymentLinkEvent, PaymentLinkEventType } from './entities/payment-link-event.entity';
+import { GetAnalyticsDto, AnalyticsBucketDto } from './dto/get-analytics.dto';
+import { CouponsService, calculateCouponDiscount } from '../coupons/coupons.service';
 import { CreatePaymentLinkDto } from './dto/create-payment-link.dto';
 import { UpdatePaymentLinkDto } from './dto/update-payment-link.dto';
 import { RedeemPaymentLinkDto } from './dto/redeem-payment-link.dto';
@@ -28,6 +32,7 @@ export class PaymentLinksService {
     private readonly repo: Repository<PaymentLink>,
     @InjectRepository(PaymentLinkEvent)
     private readonly eventRepo: Repository<PaymentLinkEvent>,
+    private readonly couponsService: CouponsService,
     appLogger: AppLogger,
   ) {
     this.logger = appLogger.child({ module: PaymentLinksService.name });
@@ -149,6 +154,8 @@ export class PaymentLinksService {
         ? { name: dto.requiredFields.name ?? false, email: dto.requiredFields.email ?? false, phone: dto.requiredFields.phone ?? false }
         : { name: false, email: false, phone: false },
       customFields: dto.customFields ?? [],
+      successUrl: dto.successUrl ?? null,
+      cancelUrl: dto.cancelUrl ?? null,
     });
     return this.repo.save(link);
   }
@@ -176,7 +183,10 @@ export class PaymentLinksService {
     return this.findByTokenOrSlug(token);
   }
 
-  async redeemLink(tokenOrSlug: string, dto: RedeemPaymentLinkDto): Promise<PaymentLink> {
+  async redeemLink(
+    tokenOrSlug: string,
+    dto: RedeemPaymentLinkDto,
+  ): Promise<PaymentLink & { couponPreview?: { couponId: string; discountAmount: number; amountDue: number } }> {
     const link = await this.findByTokenOrSlug(tokenOrSlug);
 
     // Handle flexible amount
@@ -195,7 +205,23 @@ export class PaymentLinksService {
       throw new BadRequestException(errors.join('; '));
     }
 
-    return link;
+    if (!dto.couponCode) return link;
+
+    const baseAmount = link.flexibleAmount ? Number(dto.payerAmount) : Number(link.amount);
+    const coupon = await this.couponsService.validateForLink(
+      link.merchantId,
+      dto.couponCode,
+      link.id,
+      link.currency,
+    );
+    const discountAmount = calculateCouponDiscount(baseAmount, coupon);
+    return Object.assign(link, {
+      couponPreview: {
+        couponId: coupon.id,
+        discountAmount,
+        amountDue: Number((baseAmount - discountAmount).toFixed(2)),
+      },
+    });
   }
 
   async incrementCompletions(id: string): Promise<void> {
@@ -223,7 +249,10 @@ export class PaymentLinksService {
     merchantId: string,
     pagination: PaginationDto,
   ): Promise<PaginatedResult<PaymentLink>> {
-    const { page, limit, sortBy, order } = pagination;
+    const page = pagination.page ?? 1;
+    const limit = pagination.limit ?? 20;
+    const sortBy = pagination.sortBy ?? 'createdAt';
+    const order = pagination.order ?? 'DESC';
 
     const allowedSortFields = ['createdAt', 'amount', 'views', 'completions', 'updatedAt'];
     const sortField = allowedSortFields.includes(sortBy) ? sortBy : 'createdAt';
@@ -255,6 +284,8 @@ export class PaymentLinksService {
     if (dto.amount !== undefined) link.amount = dto.amount;
     if (dto.currency !== undefined) link.currency = dto.currency;
     if (dto.description !== undefined) link.description = dto.description ?? null;
+    if (dto.successUrl !== undefined) link.successUrl = dto.successUrl ?? null;
+    if (dto.cancelUrl !== undefined) link.cancelUrl = dto.cancelUrl ?? null;
     if (dto.expiresAt !== undefined) {
       link.expiresAt = dto.expiresAt ? new Date(dto.expiresAt) : null;
     }
@@ -274,6 +305,12 @@ export class PaymentLinksService {
     }
 
     return this.repo.save(link);
+  }
+
+  async getResolvedSuccessUrl(paymentLinkId: string, paymentId: string): Promise<string | null> {
+    const link = await this.repo.findOneBy({ id: paymentLinkId });
+    if (!link?.successUrl) return null;
+    return resolvePaymentLinkSuccessUrl(link.successUrl, paymentId);
   }
 
   // ============ Analytics Methods ============
@@ -469,4 +506,8 @@ export class PaymentLinksService {
   private hashIp(ip: string): string {
     return createHash('sha256').update(ip).digest('hex').substring(0, 64);
   }
+}
+
+export function resolvePaymentLinkSuccessUrl(url: string, paymentId: string): string {
+  return url.replace(/\{PAYMENT_ID\}/g, encodeURIComponent(paymentId));
 }
