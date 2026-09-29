@@ -33,6 +33,7 @@ import { InvoicesModule } from './modules/invoices/invoices.module';
 import { CouponsModule } from './modules/coupons/coupons.module';
 import { MetricsModule } from './modules/metrics/metrics.module';
 import { HttpMetricsMiddleware } from './modules/metrics/http-metrics.middleware';
+import { MaintenanceModule } from './modules/maintenance/maintenance.module';
 
 @Module({
   imports: [
@@ -50,6 +51,7 @@ import { HttpMetricsMiddleware } from './modules/metrics/http-metrics.middleware
     LoggerModule,
     CorsModule,
     MetricsModule,
+    MaintenanceModule,
     DatabaseModule,
     HealthModule,
     UsersModule,
