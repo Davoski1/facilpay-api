@@ -22,6 +22,7 @@
     "typeorm": "typeorm-ts-node-commonjs -d src/data-source.ts",
     "migrate": "npm run typeorm -- migration:run",
     "migrate:revert": "npm run typeorm -- migration:revert",
+    "generate:openapi": "ts-node -O '{\"module\":\"commonjs\"}' scripts/generate-openapi.ts",
     "docker:dev": "docker compose up --build",
     "docker:test:e2e": "docker compose -f docker-compose.test.yml run --rm api test:e2e",
     "docker:migrate": "docker compose run --rm api migrate"
