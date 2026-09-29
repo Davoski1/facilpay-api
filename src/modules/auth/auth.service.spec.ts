@@ -36,6 +36,9 @@ import * as otplib from 'otplib';
 import { PasswordStrengthService } from './password-strength.service';
 import { User } from '../users/user.entity';
 import { AuditLogsService } from '../audit-logs/audit-logs.service';
+import { WebAuthnService } from './webauthn.service';
+import { GeoLookupService } from '../merchants/geo-lookup.service';
+import { LoginAlertsService } from './login-alerts.service';
 
 describe('AuthService', () => {
   let service: AuthService;
@@ -102,7 +105,18 @@ describe('AuthService', () => {
     record: jest.fn(),
   };
 
+  const mockWebAuthnService = {
+    hasCredentials: jest.fn().mockResolvedValue(false),
+  };
+  const mockGeoLookupService = {
+    lookupCountry: jest.fn().mockReturnValue(null),
+  };
+  const mockLoginAlertsService = {
+    sendAlertIfNeeded: jest.fn().mockResolvedValue(false),
+  };
+
   beforeEach(async () => {
+    mockWebAuthnService.hasCredentials.mockResolvedValue(false);
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         AuthService,
@@ -177,12 +191,19 @@ describe('AuthService', () => {
           useValue: {
             findOne: jest.fn(),
             save: jest.fn(),
+            update: jest.fn().mockResolvedValue({ affected: 1 }),
           },
         },
         {
           provide: AuditLogsService,
           useValue: mockAuditLogsService,
         },
+        {
+          provide: WebAuthnService,
+          useValue: mockWebAuthnService,
+        },
+        { provide: GeoLookupService, useValue: mockGeoLookupService },
+        { provide: LoginAlertsService, useValue: mockLoginAlertsService },
       ],
     }).compile();
 
@@ -279,6 +300,52 @@ describe('AuthService', () => {
   });
 
   describe('login', () => {
+    it('blocks login until a required password reset is completed', async () => {
+      mockUsersService.findByEmail.mockResolvedValue({
+        id: 'reset-required-user',
+        email: 'reset@example.com',
+        password: 'hashed-password',
+        isEmailVerified: true,
+        passwordResetRequired: true,
+      });
+
+      await expect(
+        service.login({ email: 'reset@example.com', password: 'password' }),
+      ).rejects.toThrow('A password reset is required before you can sign in.');
+      expect(bcrypt.compare).not.toHaveBeenCalled();
+    });
+
+    it('returns a short-lived second-factor token when a passkey is registered', async () => {
+      const user = {
+        id: 'passkey-user',
+        email: 'passkey@example.com',
+        password: 'hashed-password',
+        isEmailVerified: true,
+        isActive: true,
+        twoFactorEnabled: false,
+        twoFactorSecret: null,
+      };
+      mockUsersService.findByEmail.mockResolvedValue(user);
+      mockWebAuthnService.hasCredentials.mockResolvedValue(true);
+      (bcrypt.compare as jest.Mock).mockResolvedValue(true);
+      mockJwtService.signAsync.mockResolvedValue('short-lived-2fa-token');
+
+      const result = await service.login({
+        email: user.email,
+        password: 'correct-password',
+      });
+
+      expect(result).toMatchObject({
+        '2fa_required': true,
+        twoFactorToken: 'short-lived-2fa-token',
+        availableMethods: ['passkey'],
+      });
+      expect(jwtService.signAsync).toHaveBeenCalledWith(
+        { sub: user.id, purpose: 'two-factor-login' },
+        { expiresIn: '5m' },
+      );
+    });
+
     it('should login user and return access token', async () => {
       const loginDto = {
         email: 'test@example.com',

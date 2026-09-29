@@ -38,6 +38,15 @@ import { JwtAuthGuard } from './guards/jwt-auth.guard';
 import { User } from '../users/user.entity';
 import { CreateRoleDto } from './dto/create-role.dto';
 import { UpdateRoleDto } from './dto/update-role.dto';
+import {
+  RenameWebAuthnCredentialDto,
+  WebAuthnAuthenticationOptionsDto,
+  WebAuthnAuthenticationVerifyDto,
+  WebAuthnRegistrationVerifyDto,
+} from './dto/webauthn.dto';
+import { WebAuthnService } from './webauthn.service';
+import { LoginAlertsService } from './login-alerts.service';
+import { LoginAlertPreferenceDto } from './dto/login-alert-preference.dto';
 import { AssignRoleDto } from './dto/assign-role.dto';
 import {
   ApiBody,
@@ -63,6 +72,8 @@ export class AuthController {
   constructor(
     private authService: AuthService,
     private usersService: UsersService,
+    private readonly webAuthnService: WebAuthnService,
+    private readonly loginAlertsService: LoginAlertsService,
   ) {}
 
   @AuthThrottle()
@@ -210,6 +221,137 @@ export class AuthController {
       (res as any)?.status?.(HttpStatus.ACCEPTED);
     }
     return result;
+  }
+
+  @AuthThrottle()
+  @Post('webauthn/registration/options')
+  @HttpCode(HttpStatus.OK)
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth('bearer')
+  @ApiOperation({ summary: 'Create passkey registration options' })
+  @ApiOkResponse({ description: 'Registration options and a short-lived challenge token.' })
+  async getWebAuthnRegistrationOptions(@CurrentUser() user: User) {
+    return this.webAuthnService.registrationOptions(user.id);
+  }
+
+  @AuthThrottle()
+  @Post('webauthn/registration/verify')
+  @HttpCode(HttpStatus.OK)
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth('bearer')
+  @ApiOperation({ summary: 'Verify and save a registered passkey' })
+  @ApiBody({ type: WebAuthnRegistrationVerifyDto })
+  @ApiOkResponse({ description: 'Passkey registered.' })
+  async verifyWebAuthnRegistration(
+    @CurrentUser() user: User,
+    @Body() dto: WebAuthnRegistrationVerifyDto,
+  ) {
+    return this.webAuthnService.verifyRegistration(
+      user.id,
+      dto.challengeToken,
+      dto.response,
+      dto.name ?? 'Passkey',
+    );
+  }
+
+  @AuthThrottle()
+  @Public()
+  @Post('webauthn/authentication/options')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Create passkey authentication options after password verification' })
+  @ApiBody({ type: WebAuthnAuthenticationOptionsDto })
+  @ApiOkResponse({ description: 'Authentication options and a short-lived challenge token.' })
+  async getWebAuthnAuthenticationOptions(
+    @Body() dto: WebAuthnAuthenticationOptionsDto,
+  ) {
+    return this.webAuthnService.authenticationOptions(dto.twoFactorToken);
+  }
+
+  @AuthThrottle()
+  @Public()
+  @Post('webauthn/authentication/verify')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Verify a passkey and complete login' })
+  @ApiBody({ type: WebAuthnAuthenticationVerifyDto })
+  @ApiOkResponse({ description: 'Login successful.' })
+  async verifyWebAuthnAuthentication(
+    @Body() dto: WebAuthnAuthenticationVerifyDto,
+    @Req() request: Request,
+  ) {
+    const authContext = await this.webAuthnService.verifyAuthentication(
+      dto.twoFactorToken,
+      dto.challengeToken,
+      dto.response,
+    );
+    return this.authService.completePasskeyLogin(
+      authContext.userId,
+      request.ip,
+      request.headers['user-agent'],
+      authContext.deviceId,
+    );
+  }
+
+  @AuthThrottle()
+  @Get('webauthn/credentials')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth('bearer')
+  @ApiOperation({ summary: 'List registered passkeys' })
+  @ApiOkResponse({ description: 'Passkey metadata; public keys are never returned.' })
+  async listWebAuthnCredentials(@CurrentUser() user: User) {
+    return this.webAuthnService.listCredentials(user.id);
+  }
+
+  @AuthThrottle()
+  @Patch('webauthn/credentials/:id')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth('bearer')
+  @ApiOperation({ summary: 'Rename a passkey' })
+  @ApiBody({ type: RenameWebAuthnCredentialDto })
+  @ApiOkResponse({ description: 'Passkey renamed.' })
+  async renameWebAuthnCredential(
+    @CurrentUser() user: User,
+    @Param('id') id: string,
+    @Body() dto: RenameWebAuthnCredentialDto,
+  ) {
+    return this.webAuthnService.renameCredential(user.id, id, dto.name);
+  }
+
+  @AuthThrottle()
+  @Delete('webauthn/credentials/:id')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth('bearer')
+  @ApiOperation({ summary: 'Delete a passkey' })
+  @ApiNoContentResponse({ description: 'Passkey deleted.' })
+  async deleteWebAuthnCredential(
+    @CurrentUser() user: User,
+    @Param('id') id: string,
+  ): Promise<void> {
+    return this.webAuthnService.deleteCredential(user.id, id);
+  }
+
+  @AuthThrottle()
+  @Public()
+  @Get('login-alerts/:token/report')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Report an unrecognized sign-in and secure the account' })
+  @ApiOkResponse({ description: 'Sessions revoked and password reset started.' })
+  async reportUnrecognizedLogin(@Param('token') token: string) {
+    return this.loginAlertsService.reportNotMe(token);
+  }
+
+  @AuthThrottle()
+  @Patch('login-alerts/preference')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth('bearer')
+  @ApiOperation({ summary: 'Enable or disable new-device email alerts' })
+  @ApiBody({ type: LoginAlertPreferenceDto })
+  @ApiOkResponse({ description: 'New-device alert preference updated.' })
+  async setLoginAlertPreference(
+    @CurrentUser() user: User,
+    @Body() dto: LoginAlertPreferenceDto,
+  ) {
+    return this.loginAlertsService.setPreference(user.id, dto.enabled);
   }
 
   @Post('2fa/enable')
