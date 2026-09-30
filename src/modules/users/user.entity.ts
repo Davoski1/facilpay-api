@@ -79,6 +79,22 @@ export class User {
   @Column({ nullable: true })
   rateLimitTtl: number | null = null;
 
+  /** Pending new email address awaiting confirmation (#428) */
+  @Column({ type: 'varchar', nullable: true })
+  pendingEmail: string | null = null;
+
+  /** JWT token sent to the new address for email-change confirmation (#428) */
+  @Column({ type: 'varchar', nullable: true })
+  emailChangeToken: string | null = null;
+
+  /** Expiry of the email-change confirmation token (#428) */
+  @Column({ type: 'timestamptz', nullable: true })
+  emailChangeTokenExpiresAt: Date | null = null;
+
+  /** Timestamp of the most recent GDPR data-export request, used for rate-limiting (#427) */
+  @Column({ type: 'timestamptz', nullable: true })
+  dataExportRequestedAt: Date | null = null;
+
   @CreateDateColumn()
   createdAt: Date;
 

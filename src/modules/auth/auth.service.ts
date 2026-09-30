@@ -69,6 +69,7 @@ export class AuthService {
     private dataSource: DataSource,
     private passwordStrengthService: PasswordStrengthService,
     private passwordHistoryService: PasswordHistoryService,
+    private loginHistoryService: LoginHistoryService,
     @InjectRepository(RefreshToken)
     private refreshTokenRepository: Repository<RefreshToken>,
     @InjectRepository(PasswordResetToken)
@@ -152,6 +153,13 @@ export class AuthService {
         userAgent,
         metadata: { email: loginDto.email, reason: 'user_not_found' },
       });
+      await this.loginHistoryService.record({
+        userId: null,
+        success: false,
+        reason: 'user_not_found',
+        ipAddress,
+        userAgent,
+      });
       throw new UnauthorizedException('Invalid credentials');
     }
 
@@ -206,10 +214,24 @@ export class AuthService {
         userAgent,
         metadata: { email: user.email, reason: 'invalid_password' },
       });
+      await this.loginHistoryService.record({
+        userId: user.id,
+        success: false,
+        reason: 'bad_password',
+        ipAddress,
+        userAgent,
+      });
       throw new UnauthorizedException('Invalid credentials');
     }
 
     if (!user.isEmailVerified) {
+      await this.loginHistoryService.record({
+        userId: user.id,
+        success: false,
+        reason: 'email_not_verified',
+        ipAddress,
+        userAgent,
+      });
       throw new ForbiddenException(
         'Email address not verified. Please check your inbox and verify your email before logging in.',
       );
@@ -257,6 +279,13 @@ export class AuthService {
             ipAddress,
             userAgent,
             metadata: { email: user.email, reason: 'invalid_2fa' },
+          });
+          await this.loginHistoryService.record({
+            userId: user.id,
+            success: false,
+            reason: '2fa_failed',
+            ipAddress,
+            userAgent,
           });
           throw new UnauthorizedException('Invalid two-factor code');
         }

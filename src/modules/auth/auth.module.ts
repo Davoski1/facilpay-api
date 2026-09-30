@@ -16,9 +16,11 @@ import { RefreshToken } from './entities/refresh-token.entity';
 import { PasswordResetToken } from './entities/password-reset-token.entity';
 import { PasswordHistory } from './entities/password-history.entity';
 import { Role } from './entities/role.entity';
+import { LoginEvent } from './entities/login-event.entity';
 import { MailService } from './mail/mail.service';
 import { PasswordStrengthService } from './password-strength.service';
 import { PasswordHistoryService } from './password-history.service';
+import { LoginHistoryService } from './login-history.service';
 import { AuditLogsModule } from '../audit-logs/audit-logs.module';
 import { User } from '../users/user.entity';
 import { WebAuthnCredential } from './entities/webauthn-credential.entity';
@@ -58,7 +60,26 @@ import { Session } from './entities/session.entity';
     }),
   ],
   controllers: [AuthController],
-  providers: [AuthService, JwtStrategy, JwtAuthGuard, RolesGuard, PermissionsGuard, MailService, PasswordStrengthService, PasswordHistoryService],
-  exports: [AuthService, MailService, JwtAuthGuard, RolesGuard, PermissionsGuard, PasswordStrengthService, PasswordHistoryService],
+  providers: [
+    AuthService,
+    JwtStrategy,
+    JwtAuthGuard,
+    RolesGuard,
+    PermissionsGuard,
+    MailService,
+    PasswordStrengthService,
+    PasswordHistoryService,
+    LoginHistoryService,
+  ],
+  exports: [
+    AuthService,
+    MailService,
+    JwtAuthGuard,
+    RolesGuard,
+    PermissionsGuard,
+    PasswordStrengthService,
+    PasswordHistoryService,
+    LoginHistoryService,
+  ],
 })
 export class AuthModule {}
