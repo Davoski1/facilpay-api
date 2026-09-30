@@ -20,7 +20,7 @@ import { Payment } from '../payments/payment.entity';
     AuditLogsModule,
   ],
   controllers: [MerchantsController],
-  providers: [MerchantsService, GeoLookupService, MerchantLimitsService],
-  exports: [MerchantsService, MerchantLimitsService],
+  providers: [MerchantsService, GeoLookupService],
+  exports: [MerchantsService, GeoLookupService],
 })
 export class MerchantsModule { }

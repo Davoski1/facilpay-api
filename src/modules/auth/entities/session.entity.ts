@@ -24,6 +24,12 @@ export class Session {
   @Column({ nullable: true, length: 512 })
   userAgent: string | null;
 
+  @Column({ type: 'varchar', length: 64, nullable: true })
+  deviceFingerprint: string | null;
+
+  @Column({ type: 'varchar', length: 2, nullable: true })
+  countryCode: string | null;
+
   @Column({ type: 'timestamp with time zone' })
   lastActiveAt: Date;
 

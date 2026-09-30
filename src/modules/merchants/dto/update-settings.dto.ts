@@ -1,5 +1,6 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { IsOptional, IsBoolean, IsArray, IsInt, Min, Max, ArrayMinSize, ArrayMaxSize, IsTimeZone } from 'class-validator';
+import { IsOptional, IsBoolean, IsArray, IsInt, Min, Max, ArrayMinSize, ArrayMaxSize, IsTimeZone, IsObject, IsNumber, ValidateIf } from 'class-validator';
+import { Type } from 'class-transformer';
 
 export class UpdateSettingsDto {
   @ApiPropertyOptional({ description: 'Enable or disable invoice reminders', default: true })
@@ -28,4 +29,14 @@ export class UpdateSettingsDto {
   @IsOptional()
   @IsTimeZone()
   timezone?: string;
+
+  @ApiPropertyOptional({
+    description:
+      'Per-currency refund approval thresholds. Refunds above the amount require a second user to approve. ' +
+      'Pass null to disable. Example: { "USD": 500, "EUR": 450 }',
+    example: { USD: 500, EUR: 450 },
+  })
+  @IsOptional()
+  @IsObject()
+  refundApprovalThresholds?: Record<string, number> | null;
 }

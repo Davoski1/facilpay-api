@@ -48,10 +48,16 @@ export class User {
 
   @Column({ nullable: true })
   twoFactorSecret: string | null = null;
-  
+
   @Column({ default: false })
   twoFactorEnabled: boolean = false;
-  
+
+  @Column({ default: true })
+  loginAlertsEnabled: boolean = true;
+
+  @Column({ default: false })
+  passwordResetRequired: boolean = false;
+
   @Column('text', { array: true, nullable: true })
   backupCodes: string[] | null = null;
 

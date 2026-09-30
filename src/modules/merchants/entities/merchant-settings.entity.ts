@@ -26,6 +26,14 @@ export class MerchantSettings {
   @Column({ type: 'varchar', length: 64, default: 'UTC' })
   timezone: string = 'UTC';
 
+  /**
+   * Per-currency refund approval thresholds.
+   * Refunds above the configured amount require a second authorised user to approve.
+   * Example: { "USD": 500, "EUR": 450 }
+   */
+  @Column({ type: 'jsonb', nullable: true })
+  refundApprovalThresholds: Record<string, number> | null = null;
+
   @CreateDateColumn()
   createdAt: Date;
 

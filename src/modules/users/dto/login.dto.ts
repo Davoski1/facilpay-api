@@ -44,4 +44,14 @@ export class LoginDto {
     example: '123456',
   })
   twoFactorCode?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(128)
+  @ApiPropertyOptional({
+    description:
+      'Stable client-generated device identifier for new-device alerts.',
+    maxLength: 128,
+  })
+  deviceId?: string;
 }
