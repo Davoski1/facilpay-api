@@ -31,9 +31,7 @@ import { PayoutsModule } from './modules/payouts/payouts.module';
 import { AnalyticsModule } from './modules/analytics/analytics.module';
 import { InvoicesModule } from './modules/invoices/invoices.module';
 import { CouponsModule } from './modules/coupons/coupons.module';
-import { MetricsModule } from './modules/metrics/metrics.module';
-import { HttpMetricsMiddleware } from './modules/metrics/http-metrics.middleware';
-import { MaintenanceModule } from './modules/maintenance/maintenance.module';
+import { TeamModule } from './modules/team/team.module';
 
 @Module({
   imports: [
@@ -73,6 +71,7 @@ import { MaintenanceModule } from './modules/maintenance/maintenance.module';
     AnalyticsModule,
     InvoicesModule,
     CouponsModule,
+    TeamModule,
   ],
   controllers: [AppController],
   providers: [AppService],

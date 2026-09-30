@@ -12,6 +12,7 @@ import { AppLogger } from '../logger/logger.service';
 import { Logger } from 'pino';
 import { WebhookEndpoint } from './entities/webhook-endpoint.entity';
 import { WebhookDelivery, WebhookDeliveryStatus } from './entities/webhook-delivery.entity';
+import { getSerializer, CURRENT_API_VERSION, isValidApiVersion } from './payload-serializers';
 import { CreateWebhookEndpointDto } from './dto/create-webhook-endpoint.dto';
 import { UpdateWebhookEndpointDto } from './dto/update-webhook-endpoint.dto';
 import { InjectQueue } from '@nestjs/bullmq';
@@ -51,7 +52,10 @@ export class WebhooksService {
 
   async create(dto: CreateWebhookEndpointDto, merchantId: string): Promise<WebhookEndpoint> {
     const secret = `whsec_${randomBytes(32).toString('hex')}`;
-    const endpoint = this.repo.create({ ...dto, merchantId, secret });
+    const apiVersion = dto.apiVersion && isValidApiVersion(dto.apiVersion)
+      ? dto.apiVersion
+      : CURRENT_API_VERSION;
+    const endpoint = this.repo.create({ ...dto, merchantId, secret, apiVersion });
     const saved = await this.repo.save(endpoint);
     this.logger.info({ endpointId: saved.id, merchantId }, 'Webhook endpoint registered');
     return saved;
@@ -109,15 +113,11 @@ export class WebhooksService {
 
   async dispatchEventToMerchant(merchantId: string, event: string, data: any, eventId?: string): Promise<void> {
     const endpoints = await this.repo.find({ where: { merchantId, isActive: true } });
-    const payload = {
-      event,
-      timestamp: new Date().toISOString(),
-      data,
-      eventId,
-    };
 
     for (const endpoint of endpoints) {
       if (endpoint.events.includes(event as any)) {
+        const serializer = getSerializer(endpoint.apiVersion ?? CURRENT_API_VERSION);
+        const payload = serializer.serialize(event, data, eventId);
         await this.dispatchEventToEndpoint(endpoint, payload);
       }
     }

@@ -6,16 +6,48 @@ import { ApiKey, ApiKeyScope, ApiKeyEnvironment } from './api-key.entity';
 import { ApiKeyUsage } from './api-key-usage.entity';
 import { NotFoundException } from '@nestjs/common';
 import { AuditLogsService } from '../audit-logs/audit-logs.service';
+import { EmailNotificationService } from '../notifications/email-notification.service';
+
+function createWarningSelectionBuilder(rows: unknown[]) {
+    const builder: any = {
+        innerJoin: jest.fn(),
+        select: jest.fn(),
+        addSelect: jest.fn(),
+        where: jest.fn(),
+        andWhere: jest.fn(),
+        getRawMany: jest.fn().mockResolvedValue(rows),
+    };
+    for (const method of ['innerJoin', 'select', 'addSelect', 'where', 'andWhere']) {
+        builder[method].mockReturnValue(builder);
+    }
+    return builder;
+}
+
+function createWarningUpdateBuilder(affected: number) {
+    const builder: any = {
+        update: jest.fn(),
+        set: jest.fn(),
+        where: jest.fn(),
+        andWhere: jest.fn(),
+        execute: jest.fn().mockResolvedValue({ affected }),
+    };
+    for (const method of ['update', 'set', 'where', 'andWhere']) {
+        builder[method].mockReturnValue(builder);
+    }
+    return builder;
+}
 
 describe('ApiKeysService', () => {
     let service: ApiKeysService;
     let apiKeyRepository: any;
     let apiKeyUsageRepository: any;
     let configService: any;
+    let emailNotificationService: any;
 
     beforeEach(async () => {
         apiKeyRepository = {
             create: jest.fn(),
+            createQueryBuilder: jest.fn(),
             save: jest.fn(),
             find: jest.fn(),
             findOne: jest.fn(),
@@ -32,6 +64,9 @@ describe('ApiKeysService', () => {
         configService = {
             get: jest.fn(),
         };
+        emailNotificationService = {
+            sendApiKeyExpiryWarning: jest.fn().mockResolvedValue(undefined),
+        };
 
         const module: TestingModule = await Test.createTestingModule({
             providers: [
@@ -40,6 +75,10 @@ describe('ApiKeysService', () => {
                 { provide: getRepositoryToken(ApiKeyUsage), useValue: apiKeyUsageRepository },
                 { provide: ConfigService, useValue: configService },
                 { provide: AuditLogsService, useValue: { record: jest.fn().mockResolvedValue(undefined) } },
+                {
+                    provide: EmailNotificationService,
+                    useValue: emailNotificationService,
+                },
             ],
         }).compile();
 
@@ -258,6 +297,84 @@ describe('ApiKeysService', () => {
             apiKeyRepository.findOne.mockResolvedValue(null);
 
             await expect(service.rotate('non-existent', 'user-1')).rejects.toThrow(NotFoundException);
+        });
+    });
+
+    describe('sendExpiryWarnings', () => {
+        it('queues one warning for each configured expiry threshold', async () => {
+            const today = new Date('2026-03-01T12:00:00.000Z');
+            const queryBuilders: any[] = [];
+            for (const days of [14, 7, 1]) {
+                queryBuilders.push(
+                    createWarningSelectionBuilder([{
+                        id: `key-${days}`,
+                        userId: 'user-1',
+                        name: `Key ${days}`,
+                        keyPrefix: 'fp_live_abcd',
+                        expiresAt: new Date(Date.UTC(2026, 2, 1 + days, 10)),
+                        lastExpiryWarningDays: null,
+                        ownerEmail: 'owner@example.com',
+                    }]),
+                    createWarningUpdateBuilder(1),
+                );
+            }
+            apiKeyRepository.createQueryBuilder.mockImplementation(() => queryBuilders.shift());
+
+            const result = await service.sendExpiryWarnings(today);
+
+            expect(result).toBe(3);
+            expect(emailNotificationService.sendApiKeyExpiryWarning).toHaveBeenCalledTimes(3);
+            expect(emailNotificationService.sendApiKeyExpiryWarning.mock.calls.map(([warning]) => warning.daysUntilExpiry))
+                .toEqual([14, 7, 1]);
+            expect(emailNotificationService.sendApiKeyExpiryWarning).toHaveBeenCalledWith(
+                expect.objectContaining({
+                    keyName: 'Key 14',
+                    keyPrefix: 'fp_live_abcd',
+                    to: 'owner@example.com',
+                    rotateUrl: expect.stringContaining('rotate=key-14'),
+                }),
+            );
+        });
+
+        it('does not send a duplicate when another scheduler has claimed the threshold', async () => {
+            const queryBuilders: any[] = [
+                createWarningSelectionBuilder([{
+                    id: 'key-14',
+                    userId: 'user-1',
+                    name: 'Production',
+                    keyPrefix: 'fp_live_abcd',
+                    expiresAt: new Date('2026-03-15T10:00:00.000Z'),
+                    lastExpiryWarningDays: null,
+                    ownerEmail: 'owner@example.com',
+                }]),
+                createWarningUpdateBuilder(0),
+                createWarningSelectionBuilder([]),
+                createWarningSelectionBuilder([]),
+            ];
+            apiKeyRepository.createQueryBuilder.mockImplementation(() => queryBuilders.shift());
+
+            const result = await service.sendExpiryWarnings(new Date('2026-03-01T12:00:00.000Z'));
+
+            expect(result).toBe(0);
+            expect(emailNotificationService.sendApiKeyExpiryWarning).not.toHaveBeenCalled();
+        });
+
+        it('filters revoked keys out of the expiry scan', async () => {
+            const selectionBuilders = [
+                createWarningSelectionBuilder([]),
+                createWarningSelectionBuilder([]),
+                createWarningSelectionBuilder([]),
+            ];
+            const queryBuilders = [...selectionBuilders];
+            apiKeyRepository.createQueryBuilder.mockImplementation(() => queryBuilders.shift());
+
+            await service.sendExpiryWarnings(new Date('2026-03-01T12:00:00.000Z'));
+
+            expect(apiKeyRepository.createQueryBuilder).toHaveBeenCalledTimes(3);
+            for (const builder of selectionBuilders) {
+                expect(builder.where).toHaveBeenCalledWith('apiKey.isActive = true');
+            }
+            expect(emailNotificationService.sendApiKeyExpiryWarning).not.toHaveBeenCalled();
         });
     });
 });

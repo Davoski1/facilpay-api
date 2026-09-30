@@ -8,6 +8,10 @@ import { SendEmailJobData } from './email.processor';
 import type { ReportSummary } from '../reports/reports.service';
 import { formatDate, formatMoney } from './i18n/locale';
 import { translate } from './i18n/messages';
+import { NotificationPreferencesService } from './notification-preferences.service';
+import { NotificationCategory } from './notification-preference.entity';
+import { InAppNotificationsService } from './in-app-notifications.service';
+import { InAppNotificationType } from './in-app-notification.entity';
 
 @Injectable()
 export class EmailNotificationService {
@@ -15,6 +19,8 @@ export class EmailNotificationService {
 
   constructor(
     @InjectQueue('emails') private readonly emailQueue: Queue,
+    private readonly prefsService: NotificationPreferencesService,
+    private readonly inAppNotificationsService: InAppNotificationsService,
     appLogger: AppLogger,
   ) {
     this.logger = appLogger.child({ module: EmailNotificationService.name });
@@ -27,7 +33,11 @@ export class EmailNotificationService {
     amount: string,
     currency: string,
     description: string | null,
+    merchantId?: string,
   ): Promise<void> {
+    if (merchantId && !(await this.prefsService.isEmailEnabled(merchantId, NotificationCategory.PAYMENTS))) {
+      return;
+    }
     await this.enqueue({
       to,
       subject: `Payment Received: ${amount} ${currency}`,
@@ -43,6 +53,37 @@ export class EmailNotificationService {
       recipientRole: 'merchant',
       paymentId,
     });
+    if (merchantId) {
+      await this.inAppNotificationsService.create({
+        userId: merchantId,
+        type: InAppNotificationType.PAYMENT_RECEIVED,
+        title: `Payment Received: ${amount} ${currency}`,
+        body: description ? `Payment ${paymentId} — ${description}` : `Payment ${paymentId} received`,
+        link: `/payments/${paymentId}`,
+      });
+    }
+  }
+
+  async sendMerchantVolumeLimitWarning(
+    to: string,
+    currency: string,
+    limitType: string,
+    limit: number,
+    currentVolume: number,
+  ): Promise<void> {
+    await this.enqueue({
+      to,
+      subject: `Volume limit warning: ${currency}`,
+      templateName: 'merchant-volume-limit-warning',
+      templateData: {
+        currency,
+        limitType,
+        limit: limit.toFixed(2),
+        currentVolume: currentVolume.toFixed(2),
+      },
+      eventType: EmailEventType.PAYMENT_RECEIVED,
+      recipientRole: 'merchant',
+    });
   }
 
   async sendMerchantRefundIssued(
@@ -54,7 +95,11 @@ export class EmailNotificationService {
     paymentAmount: string,
     currency: string,
     reason: string | null,
+    merchantId?: string,
   ): Promise<void> {
+    if (merchantId && !(await this.prefsService.isEmailEnabled(merchantId, NotificationCategory.REFUNDS))) {
+      return;
+    }
     await this.enqueue({
       to,
       subject: `Refund Issued: ${refundAmount} ${currency}`,
@@ -73,6 +118,15 @@ export class EmailNotificationService {
       paymentId,
       refundId,
     });
+    if (merchantId) {
+      await this.inAppNotificationsService.create({
+        userId: merchantId,
+        type: InAppNotificationType.REFUND_ISSUED,
+        title: `Refund Issued: ${refundAmount} ${currency}`,
+        body: reason ? `Refund ${refundId} for payment ${paymentId} — ${reason}` : `Refund ${refundId} issued for payment ${paymentId}`,
+        link: `/payments/${paymentId}`,
+      });
+    }
   }
 
   async sendMerchantDisputeOpened(
@@ -83,7 +137,11 @@ export class EmailNotificationService {
     amount: string,
     currency: string,
     reason: string | null,
+    merchantId?: string,
   ): Promise<void> {
+    if (merchantId && !(await this.prefsService.isEmailEnabled(merchantId, NotificationCategory.DISPUTES))) {
+      return;
+    }
     await this.enqueue({
       to,
       subject: `Dispute Opened: ${amount} ${currency}`,
@@ -100,6 +158,15 @@ export class EmailNotificationService {
       recipientRole: 'merchant',
       paymentId,
     });
+    if (merchantId) {
+      await this.inAppNotificationsService.create({
+        userId: merchantId,
+        type: InAppNotificationType.DISPUTE_OPENED,
+        title: `Dispute Opened: ${amount} ${currency}`,
+        body: reason ? `Dispute ${disputeId} on payment ${paymentId} — ${reason}` : `Dispute ${disputeId} opened on payment ${paymentId}`,
+        link: `/payments/${paymentId}/disputes/${disputeId}`,
+      });
+    }
   }
 
   async sendDisputeResponseReminder(
@@ -370,12 +437,44 @@ export class EmailNotificationService {
     });
   }
 
+  async sendApiKeyExpiryWarning(data: {
+    to: string;
+    keyName: string;
+    keyPrefix: string;
+    expiresAt: Date;
+    daysUntilExpiry: number;
+    rotateUrl: string;
+    apiKeyId: string;
+  }): Promise<void> {
+    await this.enqueue(
+      {
+        to: data.to,
+        subject: `API key expires in ${data.daysUntilExpiry} days`,
+        templateName: 'api-key-expiry-warning',
+        templateData: {
+          keyName: data.keyName,
+          keyPrefix: data.keyPrefix,
+          expiryDate: data.expiresAt.toISOString().slice(0, 10),
+          daysUntilExpiry: data.daysUntilExpiry,
+          rotateUrl: data.rotateUrl,
+        },
+        eventType: EmailEventType.API_KEY_EXPIRING,
+        recipientRole: 'merchant',
+      },
+      `api-key-expiry-${data.apiKeyId}-${data.daysUntilExpiry}`,
+    );
+  }
+
   async sendMerchantReport(
     to: string,
     summary: ReportSummary,
     subscriptionId: string,
     csvContent?: string,
+    merchantId?: string,
   ): Promise<void> {
+    if (merchantId && !(await this.prefsService.isEmailEnabled(merchantId, NotificationCategory.REPORTS))) {
+      return;
+    }
     const periodLabel = summary.periodStart.toLocaleDateString('en-US', {
       year: 'numeric',
       month: 'long',
@@ -422,14 +521,15 @@ export class EmailNotificationService {
     });
   }
 
-  private async enqueue(data: SendEmailJobData): Promise<void> {
+  private async enqueue(data: SendEmailJobData, jobId?: string): Promise<void> {
     await this.emailQueue.add('send', data, {
+      ...(jobId ? { jobId } : {}),
       attempts: 3,
       backoff: {
         type: 'exponential',
         delay: 1000,
       },
-      removeOnComplete: true,
+      removeOnComplete: jobId ? { age: 30 * 24 * 60 * 60 } : true,
       removeOnFail: false,
     });
   }
@@ -565,6 +665,64 @@ export class EmailNotificationService {
       paymentId: data.paymentId,
       includeUnsubscribe: true,
       locale,
+    });
+  }
+
+  async sendRefundApprovalRequested(
+    to: string,
+    paymentId: string,
+    refundId: string,
+    amount: string,
+    currency: string,
+    initiatedBy: string | null,
+  ): Promise<void> {
+    await this.enqueue({
+      to,
+      subject: `Refund Approval Required: ${amount} ${currency}`,
+      templateName: 'refund-approval-requested',
+      templateData: {
+        paymentId,
+        refundId,
+        refundAmount: amount,
+        refundCurrency: currency,
+        initiatedBy: initiatedBy || 'system',
+      },
+      eventType: EmailEventType.REFUND_APPROVAL_REQUESTED,
+      recipientRole: 'merchant',
+      paymentId,
+      refundId,
+    });
+  }
+
+  async sendRefundApprovalOutcome(
+    to: string,
+    paymentId: string,
+    refundId: string,
+    amount: string,
+    currency: string,
+    approved: boolean,
+    rejectionReason?: string | null,
+  ): Promise<void> {
+    const eventType = approved
+      ? EmailEventType.REFUND_APPROVED
+      : EmailEventType.REFUND_REJECTED;
+    await this.enqueue({
+      to,
+      subject: approved
+        ? `Refund Approved: ${amount} ${currency}`
+        : `Refund Rejected: ${amount} ${currency}`,
+      templateName: approved ? 'refund-approved' : 'refund-rejected',
+      templateData: {
+        paymentId,
+        refundId,
+        refundAmount: amount,
+        refundCurrency: currency,
+        rejectionReason: rejectionReason || undefined,
+      },
+      eventType,
+      recipientRole: 'merchant',
+      paymentId,
+      refundId,
     });
   }
 }

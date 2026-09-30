@@ -7,6 +7,7 @@ import {
   Index,
 } from 'typeorm';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { CURRENT_API_VERSION } from '../payload-serializers/registry';
 
 export const WEBHOOK_EVENT_TYPES = [
   'payment.created',
@@ -69,6 +70,10 @@ export class WebhookEndpoint {
 
   @Column({ length: 64, nullable: true })
   disabledReason: string | null;
+
+  @Column({ length: 20, default: CURRENT_API_VERSION })
+  @ApiProperty({ example: '2026-09-01', description: 'Payload version for this endpoint' })
+  apiVersion: string;
 
   @CreateDateColumn()
   @ApiProperty({ example: '2026-01-26T10:00:00.000Z' })

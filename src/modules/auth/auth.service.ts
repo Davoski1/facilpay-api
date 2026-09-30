@@ -45,6 +45,9 @@ import { CreateRoleDto } from './dto/create-role.dto';
 import { UpdateRoleDto } from './dto/update-role.dto';
 import { SessionsService } from '../sessions/sessions.service';
 import { PasswordHistoryService } from './password-history.service';
+import { WebAuthnService } from './webauthn.service';
+import { GeoLookupService } from '../merchants/geo-lookup.service';
+import { LoginAlertsService } from './login-alerts.service';
 
 export interface SessionMetadata {
   ipAddress?: string;
@@ -66,6 +69,7 @@ export class AuthService {
     private dataSource: DataSource,
     private passwordStrengthService: PasswordStrengthService,
     private passwordHistoryService: PasswordHistoryService,
+    private loginHistoryService: LoginHistoryService,
     @InjectRepository(RefreshToken)
     private refreshTokenRepository: Repository<RefreshToken>,
     @InjectRepository(PasswordResetToken)
@@ -76,6 +80,9 @@ export class AuthService {
     private userRepository: Repository<User>,
     private auditLogsService: AuditLogsService,
     private sessionsService: SessionsService,
+    private readonly webAuthnService: WebAuthnService,
+    private readonly geoLookupService: GeoLookupService,
+    private readonly loginAlertsService: LoginAlertsService,
     appLogger: AppLogger,
   ) {
     this.logger = appLogger.child({ module: AuthService.name });
@@ -130,6 +137,8 @@ export class AuthService {
     refresh_token?: string;
     user?: Omit<User, 'password' | 'twoFactorSecret'>;
     '2fa_required'?: boolean;
+    twoFactorToken?: string;
+    availableMethods?: string[];
     message?: string;
   }> {
     const user = await this.usersService.findByEmail(loginDto.email);
@@ -143,6 +152,13 @@ export class AuthService {
         ipAddress,
         userAgent,
         metadata: { email: loginDto.email, reason: 'user_not_found' },
+      });
+      await this.loginHistoryService.record({
+        userId: null,
+        success: false,
+        reason: 'user_not_found',
+        ipAddress,
+        userAgent,
       });
       throw new UnauthorizedException('Invalid credentials');
     }
@@ -172,6 +188,12 @@ export class AuthService {
       );
     }
 
+    if (user.passwordResetRequired) {
+      throw new ForbiddenException(
+        'A password reset is required before you can sign in.',
+      );
+    }
+
     const isPasswordValid = await bcrypt.compare(
       loginDto.password,
       user.password,
@@ -192,10 +214,24 @@ export class AuthService {
         userAgent,
         metadata: { email: user.email, reason: 'invalid_password' },
       });
+      await this.loginHistoryService.record({
+        userId: user.id,
+        success: false,
+        reason: 'bad_password',
+        ipAddress,
+        userAgent,
+      });
       throw new UnauthorizedException('Invalid credentials');
     }
 
     if (!user.isEmailVerified) {
+      await this.loginHistoryService.record({
+        userId: user.id,
+        success: false,
+        reason: 'email_not_verified',
+        ipAddress,
+        userAgent,
+      });
       throw new ForbiddenException(
         'Email address not verified. Please check your inbox and verify your email before logging in.',
       );
@@ -203,11 +239,24 @@ export class AuthService {
 
     await this.usersService.resetFailedLoginAttempts(user.id);
 
-    if (user.twoFactorEnabled) {
+    const hasPasskeys = await this.webAuthnService.hasCredentials(user.id);
+    if (user.twoFactorEnabled || hasPasskeys) {
       if (!loginDto.twoFactorCode) {
         return {
           '2fa_required': true,
           message: 'Two-factor authentication code required',
+          twoFactorToken: await this.jwtService.signAsync(
+            {
+              sub: user.id,
+              purpose: 'two-factor-login',
+              ...(loginDto.deviceId ? { deviceId: loginDto.deviceId } : {}),
+            },
+            { expiresIn: '5m' },
+          ),
+          availableMethods: [
+            ...(user.twoFactorEnabled && user.twoFactorSecret ? ['totp'] : []),
+            ...(hasPasskeys ? ['passkey'] : []),
+          ],
         };
       }
 
@@ -231,29 +280,72 @@ export class AuthService {
             userAgent,
             metadata: { email: user.email, reason: 'invalid_2fa' },
           });
+          await this.loginHistoryService.record({
+            userId: user.id,
+            success: false,
+            reason: '2fa_failed',
+            ipAddress,
+            userAgent,
+          });
           throw new UnauthorizedException('Invalid two-factor code');
         }
       }
     }
 
+    return this.completeLogin(user, ipAddress, userAgent, loginDto.deviceId);
+  }
+
+  async completePasskeyLogin(
+    userId: string,
+    ipAddress?: string,
+    userAgent?: string,
+    deviceId?: string,
+  ) {
+    const user = await this.usersService.findByIdWithSecrets(userId);
+    if (
+      user.deletedAt ||
+      !user.isActive ||
+      !user.isEmailVerified ||
+      user.passwordResetRequired ||
+      this.usersService.isAccountLocked(user)
+    ) {
+      throw new UnauthorizedException('Passkey login is not available for this account');
+    }
+    return this.completeLogin(user, ipAddress, userAgent, deviceId);
+  }
+
+  private async completeLogin(
+    user: User,
+    ipAddress?: string,
+    userAgent?: string,
+    deviceId?: string,
+  ) {
+    const deviceIdentity = deviceId?.trim() || userAgent?.trim();
+    const deviceFingerprint = deviceIdentity
+      ? createHash('sha256')
+          .update(`${userAgent ?? ''}\0${deviceIdentity}`)
+          .digest('hex')
+      : null;
+    const countryCode = ipAddress
+      ? this.geoLookupService.lookupCountry(ipAddress)
+      : null;
     const session = await this.sessionsService.createSession(
       user.id,
       ipAddress,
       userAgent,
+      { deviceFingerprint, countryCode },
     );
-
     const payload = { sub: user.id, email: user.email, roles: user.roles };
     const [access_token, refresh_token] = await Promise.all([
       this.jwtService.signAsync(payload),
       this.generateRefreshToken(user.id, undefined, session.id),
     ]);
-
     const userWithoutPassword = this.sanitizeUser(user);
+
     this.logger.info(
       { userId: user.id, email: user.email },
       'User login successful',
     );
-
     await this.auditLogsService.record({
       actorId: user.id,
       actorType: 'user',
@@ -264,7 +356,17 @@ export class AuthService {
       userAgent,
       metadata: { email: user.email },
     });
-
+    try {
+      await this.loginAlertsService.sendAlertIfNeeded(user, session);
+    } catch (error) {
+      this.logger.warn(
+        {
+          userId: user.id,
+          error: error instanceof Error ? error.message : String(error),
+        },
+        'Could not send new-login security alert',
+      );
+    }
     return { access_token, refresh_token, user: userWithoutPassword };
   }
 
@@ -736,6 +838,7 @@ export class AuthService {
     if (!user) {
       return null;
     }
+    if (user.passwordResetRequired) return null;
     return this.sanitizeUser(user as User);
   }
 
@@ -990,6 +1093,10 @@ export class AuthService {
     await this.passwordHistoryService.validatePasswordNotReused(user.id, hashedPassword);
 
     await this.usersService.updatePassword(user.id, hashedPassword);
+    await this.userRepository.update(
+      { id: user.id },
+      { passwordResetRequired: false },
+    );
 
     // Record the new password in history after successful update
     await this.passwordHistoryService.recordPasswordChange(user.id, hashedPassword);
