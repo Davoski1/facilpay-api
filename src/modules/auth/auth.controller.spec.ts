@@ -19,6 +19,9 @@ import { RegisterDto } from '../users/dto/register.dto';
 import { LoginDto } from '../users/dto/login.dto';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { Role } from './entities/role.entity';
+import { WebAuthnService } from './webauthn.service';
+import { LoginAlertsService } from './login-alerts.service';
+import type { Response } from 'express';
 
 describe('AuthController', () => {
   let controller: AuthController;
@@ -27,6 +30,7 @@ describe('AuthController', () => {
   const mockAuthService = {
     register: jest.fn(),
     login: jest.fn(),
+    completePasskeyLogin: jest.fn(),
     enableTwoFactor: jest.fn(),
     verifyTwoFactor: jest.fn(),
     disableTwoFactor: jest.fn(),
@@ -36,6 +40,20 @@ describe('AuthController', () => {
 
   const mockUsersService = {
     unlockAccount: jest.fn(),
+  };
+
+  const mockWebAuthnService = {
+    registrationOptions: jest.fn(),
+    verifyRegistration: jest.fn(),
+    authenticationOptions: jest.fn(),
+    verifyAuthentication: jest.fn(),
+    listCredentials: jest.fn(),
+    renameCredential: jest.fn(),
+    deleteCredential: jest.fn(),
+  };
+  const mockLoginAlertsService = {
+    reportNotMe: jest.fn(),
+    setPreference: jest.fn(),
   };
 
   const mockRoleRepository = {
@@ -55,6 +73,14 @@ describe('AuthController', () => {
         {
           provide: UsersService,
           useValue: mockUsersService,
+        },
+        {
+          provide: WebAuthnService,
+          useValue: mockWebAuthnService,
+        },
+        {
+          provide: LoginAlertsService,
+          useValue: mockLoginAlertsService,
         },
         {
           provide: getRepositoryToken(Role),
@@ -147,6 +173,65 @@ describe('AuthController', () => {
 
       expect(response.status).toHaveBeenCalledWith(202);
       expect(result).toEqual(expectedResult);
+    });
+  });
+
+  describe('verifyWebAuthnAuthentication', () => {
+    it('verifies the assertion and completes a normal login session', async () => {
+      const dto = {
+        twoFactorToken: 'password-verified-token',
+        challengeToken: 'one-use-challenge-token',
+        response: { id: 'credential-id' },
+      } as any;
+      const request = {
+        ip: '203.0.113.4',
+        headers: { 'user-agent': 'test-browser' },
+      } as any;
+      const loginResult = { access_token: 'access', refresh_token: 'refresh' };
+      mockWebAuthnService.verifyAuthentication.mockResolvedValue({
+        userId: 'user-1',
+        deviceId: 'device-1',
+      });
+      mockAuthService.completePasskeyLogin.mockResolvedValue(loginResult);
+
+      const result = await controller.verifyWebAuthnAuthentication(dto, request);
+
+      expect(mockWebAuthnService.verifyAuthentication).toHaveBeenCalledWith(
+        dto.twoFactorToken,
+        dto.challengeToken,
+        dto.response,
+      );
+      expect(mockAuthService.completePasskeyLogin).toHaveBeenCalledWith(
+        'user-1',
+        request.ip,
+        'test-browser',
+        'device-1',
+      );
+      expect(result).toEqual(loginResult);
+    });
+  });
+
+  describe('confirmUnrecognizedLogin', () => {
+    it('renders a confirmation form instead of revoking sessions on GET', async () => {
+      const responseMock = {
+        status: jest.fn(),
+        type: jest.fn(),
+        send: jest.fn(),
+      };
+      responseMock.status.mockReturnValue(responseMock);
+      responseMock.type.mockReturnValue(responseMock);
+
+      await controller.confirmUnrecognizedLogin(
+        'single-use-token',
+        responseMock as unknown as Response,
+      );
+
+      expect(responseMock.status).toHaveBeenCalledWith(HttpStatus.OK);
+      expect(responseMock.type).toHaveBeenCalledWith('html');
+      expect(responseMock.send).toHaveBeenCalledWith(
+        expect.stringContaining('method="post"'),
+      );
+      expect(mockLoginAlertsService.reportNotMe).not.toHaveBeenCalled();
     });
   });
 

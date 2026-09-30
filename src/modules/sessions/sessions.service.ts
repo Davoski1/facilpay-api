@@ -1,4 +1,8 @@
-import { Injectable, ForbiddenException, NotFoundException } from '@nestjs/common';
+import {
+  Injectable,
+  ForbiddenException,
+  NotFoundException,
+} from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { MoreThan, Repository } from 'typeorm';
 import { Session } from './session.entity';
@@ -19,6 +23,10 @@ export class SessionsService {
     userId: string,
     ipAddress?: string,
     userAgent?: string,
+    metadata?: {
+      deviceFingerprint?: string | null;
+      countryCode?: string | null;
+    },
   ): Promise<Session> {
     const now = new Date();
     const expiresAt = new Date(now);
@@ -28,7 +36,9 @@ export class SessionsService {
       userId,
       ipAddress: ipAddress ?? null,
       userAgent: userAgent ?? null,
-      deviceInfo: null,
+      deviceInfo: userAgent ?? 'Unknown device',
+      deviceFingerprint: metadata?.deviceFingerprint ?? null,
+      countryCode: metadata?.countryCode ?? null,
       lastActiveAt: now,
       expiresAt,
       revoked: false,
@@ -80,5 +90,13 @@ export class SessionsService {
       { sessionId: session.id },
       { revoked: true },
     );
+  }
+
+  async revokeAllForUser(userId: string): Promise<void> {
+    await this.sessionRepository.update(
+      { userId, revoked: false },
+      { revoked: true },
+    );
+    await this.refreshTokenRepository.update({ userId }, { revoked: true });
   }
 }

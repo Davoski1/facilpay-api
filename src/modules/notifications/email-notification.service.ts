@@ -45,6 +45,28 @@ export class EmailNotificationService {
     });
   }
 
+  async sendMerchantVolumeLimitWarning(
+    to: string,
+    currency: string,
+    limitType: string,
+    limit: number,
+    currentVolume: number,
+  ): Promise<void> {
+    await this.enqueue({
+      to,
+      subject: `Volume limit warning: ${currency}`,
+      templateName: 'merchant-volume-limit-warning',
+      templateData: {
+        currency,
+        limitType,
+        limit: limit.toFixed(2),
+        currentVolume: currentVolume.toFixed(2),
+      },
+      eventType: EmailEventType.PAYMENT_RECEIVED,
+      recipientRole: 'merchant',
+    });
+  }
+
   async sendMerchantRefundIssued(
     to: string,
     merchantName: string | null,
@@ -370,6 +392,34 @@ export class EmailNotificationService {
     });
   }
 
+  async sendApiKeyExpiryWarning(data: {
+    to: string;
+    keyName: string;
+    keyPrefix: string;
+    expiresAt: Date;
+    daysUntilExpiry: number;
+    rotateUrl: string;
+    apiKeyId: string;
+  }): Promise<void> {
+    await this.enqueue(
+      {
+        to: data.to,
+        subject: `API key expires in ${data.daysUntilExpiry} days`,
+        templateName: 'api-key-expiry-warning',
+        templateData: {
+          keyName: data.keyName,
+          keyPrefix: data.keyPrefix,
+          expiryDate: data.expiresAt.toISOString().slice(0, 10),
+          daysUntilExpiry: data.daysUntilExpiry,
+          rotateUrl: data.rotateUrl,
+        },
+        eventType: EmailEventType.API_KEY_EXPIRING,
+        recipientRole: 'merchant',
+      },
+      `api-key-expiry-${data.apiKeyId}-${data.daysUntilExpiry}`,
+    );
+  }
+
   async sendMerchantReport(
     to: string,
     summary: ReportSummary,
@@ -422,14 +472,15 @@ export class EmailNotificationService {
     });
   }
 
-  private async enqueue(data: SendEmailJobData): Promise<void> {
+  private async enqueue(data: SendEmailJobData, jobId?: string): Promise<void> {
     await this.emailQueue.add('send', data, {
+      ...(jobId ? { jobId } : {}),
       attempts: 3,
       backoff: {
         type: 'exponential',
         delay: 1000,
       },
-      removeOnComplete: true,
+      removeOnComplete: jobId ? { age: 30 * 24 * 60 * 60 } : true,
       removeOnFail: false,
     });
   }
@@ -565,6 +616,64 @@ export class EmailNotificationService {
       paymentId: data.paymentId,
       includeUnsubscribe: true,
       locale,
+    });
+  }
+
+  async sendRefundApprovalRequested(
+    to: string,
+    paymentId: string,
+    refundId: string,
+    amount: string,
+    currency: string,
+    initiatedBy: string | null,
+  ): Promise<void> {
+    await this.enqueue({
+      to,
+      subject: `Refund Approval Required: ${amount} ${currency}`,
+      templateName: 'refund-approval-requested',
+      templateData: {
+        paymentId,
+        refundId,
+        refundAmount: amount,
+        refundCurrency: currency,
+        initiatedBy: initiatedBy || 'system',
+      },
+      eventType: EmailEventType.REFUND_APPROVAL_REQUESTED,
+      recipientRole: 'merchant',
+      paymentId,
+      refundId,
+    });
+  }
+
+  async sendRefundApprovalOutcome(
+    to: string,
+    paymentId: string,
+    refundId: string,
+    amount: string,
+    currency: string,
+    approved: boolean,
+    rejectionReason?: string | null,
+  ): Promise<void> {
+    const eventType = approved
+      ? EmailEventType.REFUND_APPROVED
+      : EmailEventType.REFUND_REJECTED;
+    await this.enqueue({
+      to,
+      subject: approved
+        ? `Refund Approved: ${amount} ${currency}`
+        : `Refund Rejected: ${amount} ${currency}`,
+      templateName: approved ? 'refund-approved' : 'refund-rejected',
+      templateData: {
+        paymentId,
+        refundId,
+        refundAmount: amount,
+        refundCurrency: currency,
+        rejectionReason: rejectionReason || undefined,
+      },
+      eventType,
+      recipientRole: 'merchant',
+      paymentId,
+      refundId,
     });
   }
 }

@@ -68,6 +68,38 @@ export class Refund {
   @ApiPropertyOptional({ description: 'User ID or system actor that initiated the refund' })
   initiatedBy: string | null;
 
+  @Column({
+    type: 'enum',
+    enum: RefundStatus,
+    default: RefundStatus.EXECUTED,
+  })
+  @ApiProperty({ enum: RefundStatus, default: RefundStatus.EXECUTED })
+  status: RefundStatus;
+
+  @Column({ nullable: true })
+  @ApiPropertyOptional({ description: 'User ID of the approver' })
+  approvedBy: string | null;
+
+  @Column({ type: 'timestamptz', nullable: true })
+  @ApiPropertyOptional()
+  approvedAt: Date | null;
+
+  @Column({ nullable: true })
+  @ApiPropertyOptional({ description: 'User ID of the rejector' })
+  rejectedBy: string | null;
+
+  @Column({ type: 'timestamptz', nullable: true })
+  @ApiPropertyOptional()
+  rejectedAt: Date | null;
+
+  @Column({ type: 'varchar', length: 500, nullable: true })
+  @ApiPropertyOptional()
+  rejectionReason: string | null;
+
+  @Column({ type: 'timestamptz', nullable: true })
+  @ApiPropertyOptional({ description: 'When this pending approval expires (72 h after creation)' })
+  expiresAt: Date | null;
+
   @CreateDateColumn()
   @ApiProperty()
   createdAt: Date;

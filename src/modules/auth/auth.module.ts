@@ -23,6 +23,13 @@ import { PasswordHistoryService } from './password-history.service';
 import { LoginHistoryService } from './login-history.service';
 import { AuditLogsModule } from '../audit-logs/audit-logs.module';
 import { User } from '../users/user.entity';
+import { WebAuthnCredential } from './entities/webauthn-credential.entity';
+import { WebAuthnChallenge } from './entities/webauthn-challenge.entity';
+import { WebAuthnService } from './webauthn.service';
+import { LoginAlertActionToken } from './entities/login-alert-action-token.entity';
+import { LoginAlertsService } from './login-alerts.service';
+import { MerchantsModule } from '../merchants/merchants.module';
+import { Session } from './entities/session.entity';
 
 @Module({
   imports: [
@@ -30,7 +37,18 @@ import { User } from '../users/user.entity';
     PassportModule,
     HttpModule,
     SessionsModule,
-    TypeOrmModule.forFeature([RefreshToken, PasswordResetToken, PasswordHistory, Role, LoginEvent, User]),
+    MerchantsModule,
+    TypeOrmModule.forFeature([
+      RefreshToken,
+      PasswordResetToken,
+      PasswordHistory,
+      Role,
+      User,
+      WebAuthnCredential,
+      WebAuthnChallenge,
+      LoginAlertActionToken,
+      Session,
+    ]),
     AuditLogsModule,
     JwtModule.registerAsync({
       imports: [ConfigModule],

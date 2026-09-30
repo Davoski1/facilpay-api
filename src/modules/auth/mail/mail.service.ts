@@ -3,6 +3,19 @@ import { ConfigService } from '@nestjs/config';
 import * as nodemailer from 'nodemailer';
 import { Settlement } from '../../settlements/entities/settlement.entity';
 
+function escapeHtml(value: string): string {
+  return value.replace(/[&<>"']/g, (character) => {
+    const entities: Record<string, string> = {
+      '&': '&amp;',
+      '<': '&lt;',
+      '>': '&gt;',
+      '"': '&quot;',
+      "'": '&#39;',
+    };
+    return entities[character];
+  });
+}
+
 @Injectable()
 export class MailService {
   private transporter: nodemailer.Transporter;
@@ -11,8 +24,7 @@ export class MailService {
     this.transporter = nodemailer.createTransport({
       host: this.configService.get<string>('SMTP_HOST', 'smtp.ethereal.email'),
       port: this.configService.get<number>('SMTP_PORT', 587),
-      secure:
-        this.configService.get<string>('SMTP_SECURE', 'false') === 'true',
+      secure: this.configService.get<string>('SMTP_SECURE', 'false') === 'true',
       auth: {
         user: this.configService.get<string>('SMTP_USER', ''),
         pass: this.configService.get<string>('SMTP_PASS', ''),
@@ -97,7 +109,10 @@ export class MailService {
     totalAmount: number,
   ): Promise<void> {
     await this.transporter.sendMail({
-      from: this.configService.get<string>('SMTP_FROM', '"FacilPay" <noreply@facilpay.com>'),
+      from: this.configService.get<string>(
+        'SMTP_FROM',
+        '"FacilPay" <noreply@facilpay.com>',
+      ),
       to,
       subject: `FacilPay: Your ${settlement.schedule} settlement has been processed`,
       text:
@@ -121,11 +136,17 @@ export class MailService {
     label: string,
     token: string,
   ): Promise<void> {
-    const appUrl = this.configService.get<string>('APP_URL', 'http://localhost:3000');
+    const appUrl = this.configService.get<string>(
+      'APP_URL',
+      'http://localhost:3000',
+    );
     const verifyUrl = `${appUrl}/v1/settlements/destinations/${destinationId}/verify?token=${encodeURIComponent(token)}`;
 
     await this.transporter.sendMail({
-      from: this.configService.get<string>('SMTP_FROM', '"FacilPay" <noreply@facilpay.com>'),
+      from: this.configService.get<string>(
+        'SMTP_FROM',
+        '"FacilPay" <noreply@facilpay.com>',
+      ),
       to,
       subject: 'Confirm your FacilPay payout destination',
       text: `Confirm the payout destination "${label}" by opening: ${verifyUrl}. This link expires in 24 hours.`,
@@ -165,6 +186,52 @@ export class MailService {
     });
   }
 
+  async sendNewLoginAlertEmail(
+    to: string,
+    details: {
+      time: Date;
+      ipAddress: string | null;
+      countryCode: string | null;
+      device: string;
+      userAgent: string | null;
+      reportUrl: string;
+    },
+  ): Promise<void> {
+    const appUrl = this.configService.get<string>(
+      'APP_URL',
+      'http://localhost:3000',
+    );
+    const date = details.time.toISOString();
+    const location = details.countryCode ?? 'Unknown location';
+    const ipAddress = details.ipAddress ?? 'Unknown IP';
+    const device = details.device.slice(0, 512);
+    const userAgent = (details.userAgent ?? 'Unknown browser').slice(0, 512);
+    const reportUrl = escapeHtml(details.reportUrl);
+
+    await this.transporter.sendMail({
+      from: this.configService.get<string>(
+        'SMTP_FROM',
+        '"FacilPay" <noreply@facilpay.com>',
+      ),
+      to,
+      subject: 'New sign-in to your FacilPay account',
+      text:
+        `A new sign-in was detected at ${date}.\n` +
+        `IP: ${ipAddress}\nLocation: ${location}\nDevice: ${device}\n` +
+        `Browser: ${userAgent}\n\nIf this was not you, report it here: ${details.reportUrl}`,
+      html:
+        `<p>A new sign-in was detected on your FacilPay account.</p>` +
+        `<ul><li>Time: ${escapeHtml(date)}</li>` +
+        `<li>IP: ${escapeHtml(ipAddress)}</li>` +
+        `<li>Location: ${escapeHtml(location)}</li>` +
+        `<li>Device: ${escapeHtml(device)}</li>` +
+        `<li>Browser: ${escapeHtml(userAgent)}</li></ul>` +
+        `<p><a href="${reportUrl}">This wasn't me</a></p>` +
+        `<p>If you don't recognize this sign-in, report it to revoke sessions and require a password reset.</p>` +
+        `<p><a href="${escapeHtml(appUrl)}">FacilPay</a></p>`,
+    });
+  }
+
   async sendTwoFactorDisabledEmail(to: string): Promise<void> {
     await this.transporter.sendMail({
       from: this.configService.get<string>(
@@ -172,13 +239,17 @@ export class MailService {
         '"FacilPay" <noreply@facilpay.com>',
       ),
       to,
-      subject: 'Two-factor authentication was disabled on your FacilPay account',
+      subject:
+        'Two-factor authentication was disabled on your FacilPay account',
       text: 'Two-factor authentication has been disabled for your account. If you did not do this, please secure your account immediately.',
       html: '<p>Two-factor authentication has been disabled for your account.</p><p>If you did not do this, please secure your account immediately.</p>',
     });
   }
 
-  async sendAccountLockedEmail(to: string, lockDurationMinutes: number): Promise<void> {
+  async sendAccountLockedEmail(
+    to: string,
+    lockDurationMinutes: number,
+  ): Promise<void> {
     await this.transporter.sendMail({
       from: this.configService.get<string>(
         'SMTP_FROM',

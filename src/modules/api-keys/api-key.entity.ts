@@ -66,6 +66,10 @@ export class ApiKey {
   @ApiPropertyOptional({ example: '2027-01-01T00:00:00.000Z' })
   expiresAt: Date | null;
 
+  @Column({ type: 'int', nullable: true })
+  @ApiPropertyOptional({ enum: [14, 7, 1] })
+  lastExpiryWarningDays: number | null;
+
   @Column({ nullable: true, type: 'timestamp' })
   @ApiPropertyOptional({ example: '2026-06-28T10:00:00.000Z' })
   lastUsedAt: Date | null;

@@ -1,4 +1,4 @@
-import { Controller, Patch, Get, Put, Body, UseGuards, UseInterceptors, UploadedFile, Post } from '@nestjs/common';
+import { Controller, Patch, Get, Put, Body, UseGuards, UseInterceptors, UploadedFile, Post, Param } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import {
   ApiTags,
@@ -22,13 +22,38 @@ import { MerchantSettings } from './entities/merchant-settings.entity';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { User } from '../users/user.entity';
+import { MerchantLimitsService } from './merchant-limits.service';
+import { UpsertMerchantLimitsDto } from './dto/upsert-merchant-limits.dto';
+import { RolesGuard } from '../auth/roles.guard';
+import { Roles } from '../auth/decorators/roles.decorator';
+import { UserRole } from '../../common/constants/roles';
 
 @ApiTags('merchants')
 @ApiBearerAuth('bearer')
 @UseGuards(JwtAuthGuard)
 @Controller('v1/merchants')
 export class MerchantsController {
-  constructor(private readonly merchantsService: MerchantsService) {}
+  constructor(
+    private readonly merchantsService: MerchantsService,
+    private readonly merchantLimitsService: MerchantLimitsService,
+  ) {}
+
+  @Get('me/limits')
+  @ApiOperation({ summary: 'Get the authenticated merchant volume limits' })
+  getMyLimits(@CurrentUser() user: User) {
+    return this.merchantLimitsService.getForMerchant(user.id);
+  }
+
+  @Patch('admin/:merchantId/limits')
+  @UseGuards(RolesGuard)
+  @Roles(UserRole.ADMIN)
+  @ApiOperation({ summary: 'Configure volume limits for a merchant (admin)' })
+  upsertMerchantLimits(
+    @Param('merchantId') merchantId: string,
+    @Body() dto: UpsertMerchantLimitsDto,
+  ) {
+    return this.merchantLimitsService.upsert(merchantId, dto);
+  }
 
   @Get('me')
   @ApiOperation({
