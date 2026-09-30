@@ -48,6 +48,8 @@ import { TeamModule } from './modules/team/team.module';
     ThrottlerConfigModule,
     LoggerModule,
     CorsModule,
+    MetricsModule,
+    MaintenanceModule,
     DatabaseModule,
     HealthModule,
     UsersModule,
@@ -76,6 +78,6 @@ import { TeamModule } from './modules/team/team.module';
 })
 export class AppModule implements NestModule {
   configure(consumer: MiddlewareConsumer) {
-    consumer.apply(SecurityHeadersMiddleware, HttpLoggerMiddleware).forRoutes('*');
+    consumer.apply(SecurityHeadersMiddleware, HttpLoggerMiddleware, HttpMetricsMiddleware).forRoutes('*');
   }
 }
