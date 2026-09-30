@@ -277,6 +277,8 @@ export class PaymentsService {
     authenticatedMerchantId?: string,
   ): Promise<Payment> {
     const queryRunner = this.dataSource.createQueryRunner();
+    let limitWarnings: MerchantLimitWarning[] = [];
+    let paymentMerchantId: string | undefined;
 
     try {
       await queryRunner.connect();
@@ -428,6 +430,11 @@ export class PaymentsService {
 
       await queryRunner.commitTransaction();
       this.logger.info(`Payment created successfully: ${savedPayment.id}`);
+      await this.sendMerchantLimitWarnings(
+        paymentMerchantId,
+        createPaymentDto.currency,
+        limitWarnings,
+      );
 
       if (savedPayment.paymentLinkId) {
         savedPayment.successUrl = await this.paymentLinksService.getResolvedSuccessUrl(
@@ -471,6 +478,11 @@ export class PaymentsService {
     authenticatedMerchantId?: string,
   ): Promise<{ created: number; payments: Payment[] }> {
     const queryRunner = this.dataSource.createQueryRunner();
+    const limitWarnings: Array<{
+      merchantId: string;
+      currency: string;
+      warnings: MerchantLimitWarning[];
+    }> = [];
 
     try {
       await queryRunner.connect();
@@ -530,27 +542,41 @@ export class PaymentsService {
         await this.usersService.assertMerchantActive(authenticatedMerchantId);
       }
 
-      const paymentPayloads = await Promise.all(
-        resolvedPaymentDtos.map(async (createPaymentDto) => {
-          await this.ensurePaymentLimits(createPaymentDto);
-          const fee = await this.calculateFee(
-            createPaymentDto.merchantId,
-            Number(createPaymentDto.amount),
-          );
-          return {
-            ...createPaymentDto,
-            feeAmount: fee.feeAmount,
-            netAmount: fee.netAmount,
-            feeBreakdown: fee.feeBreakdown,
-            status: PaymentStatus.PENDING,
-            expiresAt: new Date(
-              Date.now() +
-                (createPaymentDto.expiresIn ?? this.getDefaultExpirySeconds()) *
-                  1000,
-            ),
-          };
-        }),
-      );
+      const batchTotals = new Map<string, number>();
+      const paymentPayloads = [];
+      for (const createPaymentDto of resolvedPaymentDtos) {
+        await this.ensurePaymentLimits(createPaymentDto);
+        const warnings = await this.merchantLimitsService.enforce(
+          createPaymentDto.merchantId,
+          createPaymentDto.currency,
+          Number(createPaymentDto.amount),
+          queryRunner.manager,
+          batchTotals,
+        );
+        if (warnings.length && createPaymentDto.merchantId) {
+          limitWarnings.push({
+            merchantId: createPaymentDto.merchantId,
+            currency: createPaymentDto.currency,
+            warnings,
+          });
+        }
+        const fee = await this.calculateFee(
+          createPaymentDto.merchantId,
+          Number(createPaymentDto.amount),
+        );
+        paymentPayloads.push({
+          ...createPaymentDto,
+          feeAmount: fee.feeAmount,
+          netAmount: fee.netAmount,
+          feeBreakdown: fee.feeBreakdown,
+          status: PaymentStatus.PENDING,
+          expiresAt: new Date(
+            Date.now() +
+              (createPaymentDto.expiresIn ?? this.getDefaultExpirySeconds()) *
+                1000,
+          ),
+        });
+      }
 
       const payments = paymentPayloads.map((createPaymentDto) =>
         queryRunner.manager.create(Payment, {
@@ -568,6 +594,13 @@ export class PaymentsService {
       const savedPayments = await queryRunner.manager.save(payments);
 
       await queryRunner.commitTransaction();
+      for (const warning of limitWarnings) {
+        await this.sendMerchantLimitWarnings(
+          warning.merchantId,
+          warning.currency,
+          warning.warnings,
+        );
+      }
       this.logger.info(
         `Bulk payment creation succeeded: ${savedPayments.length} payments created.`,
       );
@@ -588,6 +621,30 @@ export class PaymentsService {
       throw error;
     } finally {
       await queryRunner.release();
+    }
+  }
+
+  private async sendMerchantLimitWarnings(
+    merchantId: string | undefined,
+    currency: string,
+    warnings: MerchantLimitWarning[],
+  ): Promise<void> {
+    if (!merchantId || warnings.length === 0) return;
+    try {
+      const merchant = await this.usersService.findOne(merchantId);
+      for (const warning of warnings) {
+        await this.emailNotificationService.sendMerchantVolumeLimitWarning(
+          merchant.email,
+          currency,
+          warning.limitType,
+          warning.limit,
+          warning.currentVolume,
+        );
+      }
+    } catch (error) {
+      this.logger.warn(
+        `Unable to send merchant volume-limit warning for ${merchantId}: ${error instanceof Error ? error.message : String(error)}`,
+      );
     }
   }
 
