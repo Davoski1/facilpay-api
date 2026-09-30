@@ -13,10 +13,21 @@ import { EmailSuppression } from './email-suppression.entity';
 import { EmailEventsService } from './email-events/email-events.service';
 import { EmailEventsController } from './email-events/email-events.controller';
 import { AdminEmailSuppressionsController } from './email-events/admin-email-suppressions.controller';
+import { InAppNotification } from './in-app-notification.entity';
+import { InAppNotificationsService } from './in-app-notifications.service';
+import { InAppNotificationsController } from './in-app-notifications.controller';
+import { NotificationPreference } from './notification-preference.entity';
+import { NotificationPreferencesService } from './notification-preferences.service';
+import { NotificationPreferencesController } from './notification-preferences.controller';
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([EmailLog, EmailSuppression]),
+    TypeOrmModule.forFeature([
+      EmailLog,
+      EmailSuppression,
+      InAppNotification,
+      NotificationPreference,
+    ]),
     BullModule.registerQueue({
       name: 'emails',
     }),
@@ -48,8 +59,26 @@ import { AdminEmailSuppressionsController } from './email-events/admin-email-sup
       }),
     }),
   ],
-  controllers: [EmailEventsController, AdminEmailSuppressionsController],
-  providers: [EmailService, EmailProcessor, EmailNotificationService, EmailEventsService],
-  exports: [EmailService, EmailNotificationService, EmailEventsService],
+  controllers: [
+    EmailEventsController,
+    AdminEmailSuppressionsController,
+    InAppNotificationsController,
+    NotificationPreferencesController,
+  ],
+  providers: [
+    EmailService,
+    EmailProcessor,
+    EmailNotificationService,
+    EmailEventsService,
+    InAppNotificationsService,
+    NotificationPreferencesService,
+  ],
+  exports: [
+    EmailService,
+    EmailNotificationService,
+    EmailEventsService,
+    InAppNotificationsService,
+    NotificationPreferencesService,
+  ],
 })
 export class NotificationsModule {}

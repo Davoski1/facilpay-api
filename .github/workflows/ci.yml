@@ -30,6 +30,38 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run build
+      - run: npm run generate:openapi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: openapi-spec
+          path: dist/openapi.json
+
+  openapi-breaking-changes:
+    name: Check OpenAPI Breaking Changes
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - run: npm run generate:openapi
+      - name: Check for breaking changes
+        run: |
+          git fetch origin main:main
+          if git show main:dist/openapi.json > /tmp/openapi-main.json 2>/dev/null; then
+            echo "Comparing OpenAPI specs..."
+            if ! diff -q /tmp/openapi-main.json dist/openapi.json > /dev/null; then
+              echo "OpenAPI spec has changed. Consider checking for breaking changes."
+            fi
+          else
+            echo "No previous OpenAPI spec found in main branch"
+          fi
 
   test:
     name: Unit Tests

@@ -13,6 +13,7 @@ import { CouponsModule } from '../coupons/coupons.module';
     ConfigModule,
     CouponsModule,
     LoggerModule,
+    MerchantsModule,
     TypeOrmModule.forFeature([PaymentLink, PaymentLinkEvent]),
     UsersModule,
   ],

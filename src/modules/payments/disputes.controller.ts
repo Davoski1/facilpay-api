@@ -10,9 +10,17 @@ import {
   HttpCode,
   HttpStatus,
   BadRequestException,
+  UploadedFile,
+  UseInterceptors,
+  Res,
+  Request,
 } from '@nestjs/common';
-import { ApiTags, ApiOperation, ApiBody, ApiParam, ApiQuery, ApiBearerAuth, ApiCreatedResponse, ApiOkResponse, ApiBadRequestResponse, ApiNotFoundResponse, ApiConflictResponse, ApiForbiddenResponse, ApiInternalServerErrorResponse, ApiResponse } from '@nestjs/swagger';
+import { FileInterceptor } from '@nestjs/platform-express';
+import { memoryStorage } from 'multer';
+import { Response } from 'express';
+import { ApiTags, ApiOperation, ApiBody, ApiParam, ApiQuery, ApiBearerAuth, ApiCreatedResponse, ApiOkResponse, ApiBadRequestResponse, ApiNotFoundResponse, ApiConflictResponse, ApiForbiddenResponse, ApiInternalServerErrorResponse, ApiResponse, ApiConsumes } from '@nestjs/swagger';
 import { DisputesService } from './disputes.service';
+import { DisputeEvidenceService } from './dispute-evidence.service';
 import { CreateDisputeDto } from './dto/create-dispute.dto';
 import { UpdateDisputeDto } from './dto/update-dispute.dto';
 import { Dispute, DisputeStatus } from './dispute.entity';
@@ -24,7 +32,10 @@ import { UserRole } from '../../common/constants/roles';
 @ApiTags('disputes')
 @Controller('v1')
 export class DisputesController {
-  constructor(private readonly disputesService: DisputesService) {}
+  constructor(
+    private readonly disputesService: DisputesService,
+    private readonly disputeEvidenceService: DisputeEvidenceService,
+  ) {}
 
   @Post('payments/:id/dispute')
   @UseGuards(JwtAuthGuard)
@@ -262,5 +273,82 @@ export class DisputesController {
   })
   async update(@Param('id') id: string, @Body() updateDisputeDto: UpdateDisputeDto) {
     return this.disputesService.update(id, updateDisputeDto);
+  }
+
+  // ── Evidence endpoints ────────────────────────────────────────────────────
+
+  @Post('disputes/:id/evidence')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth('bearer')
+  @UseInterceptors(FileInterceptor('file', { storage: memoryStorage() }))
+  @ApiConsumes('multipart/form-data')
+  @ApiOperation({
+    summary: 'Upload evidence file to a dispute',
+    description:
+      'Attach a PDF, PNG or JPEG file (≤ 10 MB) as evidence. MIME type is validated by magic bytes. Max 10 files per dispute. Evidence cannot be added once a dispute is resolved or closed.',
+  })
+  @ApiParam({ name: 'id', description: 'Dispute UUID' })
+  @ApiBody({
+    schema: {
+      type: 'object',
+      properties: { file: { type: 'string', format: 'binary' } },
+      required: ['file'],
+    },
+  })
+  @ApiCreatedResponse({ description: 'Evidence uploaded successfully.' })
+  @ApiBadRequestResponse({ description: 'Invalid file type or file too large.' })
+  @ApiConflictResponse({ description: 'Dispute is resolved/closed or max files reached.' })
+  @ApiNotFoundResponse({ description: 'Dispute not found.' })
+  async uploadEvidence(
+    @Param('id') disputeId: string,
+    @UploadedFile() file: Express.Multer.File,
+    @Request() req: any,
+  ) {
+    if (!file) {
+      throw new BadRequestException('A file must be attached under the "file" field');
+    }
+    return this.disputeEvidenceService.upload(disputeId, file, req.user?.id);
+  }
+
+  @Get('disputes/:id/evidence')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth('bearer')
+  @ApiOperation({
+    summary: 'List evidence files for a dispute',
+    description: 'Returns metadata for all evidence files attached to the dispute.',
+  })
+  @ApiParam({ name: 'id', description: 'Dispute UUID' })
+  @ApiOkResponse({ description: 'List of evidence records.' })
+  @ApiNotFoundResponse({ description: 'Dispute not found.' })
+  async listEvidence(@Param('id') disputeId: string) {
+    return this.disputeEvidenceService.list(disputeId);
+  }
+
+  @Get('disputes/:id/evidence/:evidenceId/download')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth('bearer')
+  @ApiOperation({
+    summary: 'Download an evidence file',
+    description: 'Streams the evidence file back to the caller.',
+  })
+  @ApiParam({ name: 'id', description: 'Dispute UUID' })
+  @ApiParam({ name: 'evidenceId', description: 'Evidence UUID' })
+  @ApiOkResponse({ description: 'File binary stream.' })
+  @ApiNotFoundResponse({ description: 'Dispute or evidence not found.' })
+  async downloadEvidence(
+    @Param('id') disputeId: string,
+    @Param('evidenceId') evidenceId: string,
+    @Res() res: Response,
+  ) {
+    const { buffer, mimeType, fileName } = await this.disputeEvidenceService.download(
+      disputeId,
+      evidenceId,
+    );
+    res.set({
+      'Content-Type': mimeType,
+      'Content-Disposition': `attachment; filename="${encodeURIComponent(fileName)}"`,
+      'Content-Length': buffer.length.toString(),
+    });
+    res.end(buffer);
   }
 }

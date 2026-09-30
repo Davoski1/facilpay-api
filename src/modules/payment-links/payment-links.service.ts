@@ -203,6 +203,12 @@ export class PaymentLinksService {
       }
     }
 
+    await this.merchantLimitsService.enforce(
+      link.merchantId,
+      link.currency,
+      Number(link.flexibleAmount ? dto.payerAmount : link.amount),
+    );
+
     // Validate required/custom fields
     const { valid, errors } = this.validatePayerFields(link, dto);
     if (!valid) {

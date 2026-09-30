@@ -4,6 +4,7 @@ import { mkdirSync } from 'node:fs';
 import pino, { Logger } from 'pino';
 import { buildLoggerConfig, buildTransportTargets } from './logger.config';
 import { getCorrelationId } from './correlation-id.context';
+import { getTraceId } from '../../tracing';
 
 @Injectable()
 export class AppLogger implements LoggerService {
@@ -44,22 +45,37 @@ export class AppLogger implements LoggerService {
   }
 
   log(message: any, context?: string) {
-    this.logger.info({ context, correlationId: getCorrelationId() }, message);
+    this.logger.info(
+      { context, correlationId: getCorrelationId(), traceId: getTraceId() },
+      message,
+    );
   }
 
   error(message: any, trace?: string, context?: string) {
-    this.logger.error({ context, trace, correlationId: getCorrelationId() }, message);
+    this.logger.error(
+      { context, trace, correlationId: getCorrelationId(), traceId: getTraceId() },
+      message,
+    );
   }
 
   warn(message: any, context?: string) {
-    this.logger.warn({ context, correlationId: getCorrelationId() }, message);
+    this.logger.warn(
+      { context, correlationId: getCorrelationId(), traceId: getTraceId() },
+      message,
+    );
   }
 
   debug(message: any, context?: string) {
-    this.logger.debug({ context, correlationId: getCorrelationId() }, message);
+    this.logger.debug(
+      { context, correlationId: getCorrelationId(), traceId: getTraceId() },
+      message,
+    );
   }
 
   verbose(message: any, context?: string) {
-    this.logger.trace({ context, correlationId: getCorrelationId() }, message);
+    this.logger.trace(
+      { context, correlationId: getCorrelationId(), traceId: getTraceId() },
+      message,
+    );
   }
 }
