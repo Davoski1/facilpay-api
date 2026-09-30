@@ -106,9 +106,13 @@ If 2FA is enabled and no `twoFactorCode` is provided, the server returns **202 A
 ```json
 {
   "2fa_required": true,
-  "message": "Two-factor authentication code required"
+  "message": "Two-factor authentication code required",
+  "twoFactorToken": "short-lived-signed-token",
+  "availableMethods": ["totp", "passkey"]
 }
 ```
+
+The `twoFactorToken` is valid for five minutes and can be used with either a TOTP code or a registered passkey. A passkey registered on an account also requires this password-first step at login.
 
 ### Step 2 — Resubmit with TOTP code
 
@@ -161,6 +165,60 @@ If the authenticator app is unavailable, pass a backup code in the `twoFactorCod
 ```
 
 Each backup code is single-use and is permanently consumed on successful authentication.
+
+### Using a passkey
+
+Register a passkey while authenticated. First request options:
+
+```
+POST /v1/auth/webauthn/registration/options
+Authorization: Bearer <access_token>
+```
+
+Pass the returned `options` to `navigator.credentials.create()`, then submit its JSON response:
+
+```
+POST /v1/auth/webauthn/registration/verify
+Authorization: Bearer <access_token>
+```
+
+```json
+{
+  "challengeToken": "short-lived-registration-token",
+  "name": "Work laptop",
+  "response": { "id": "...", "response": { "...": "..." } }
+}
+```
+
+After password login returns `twoFactorToken`, request assertion options and pass the returned `options` to `navigator.credentials.get()`:
+
+```
+POST /v1/auth/webauthn/authentication/options
+```
+
+Then submit the assertion to complete login:
+
+```
+POST /v1/auth/webauthn/authentication/verify
+```
+
+```json
+{
+  "twoFactorToken": "short-lived-signed-token",
+  "challengeToken": "short-lived-authentication-token",
+  "response": { "id": "...", "response": { "...": "..." } }
+}
+```
+
+The challenge is single-use and expires after five minutes. User verification is required, and a non-advancing signature counter is rejected for authenticators that report counters.
+
+Manage registered credentials using the authenticated endpoints:
+
+- `GET /v1/auth/webauthn/credentials` lists passkey metadata.
+- `PATCH /v1/auth/webauthn/credentials/:id` renames a passkey with `{ "name": "..." }`.
+- `DELETE /v1/auth/webauthn/credentials/:id` removes a passkey.
+
+Configure `WEBAUTHN_RP_ID` and `WEBAUTHN_ORIGIN` to match the browser-facing domain in production. They default to the hostname and origin in `APP_URL`.
 
 > **Note:** The failed-login-attempt counter (and the resulting account lockout) is only driven by wrong passwords. Failed-login attempts are reset as soon as the password check succeeds, before the 2FA code is checked, so an incorrect `twoFactorCode` or backup code never increments that counter — it simply returns `401 Invalid two-factor code`. A user who knows the correct password can retry `twoFactorCode` indefinitely without triggering a lockout.
 

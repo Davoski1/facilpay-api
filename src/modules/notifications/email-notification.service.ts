@@ -370,6 +370,34 @@ export class EmailNotificationService {
     });
   }
 
+  async sendApiKeyExpiryWarning(data: {
+    to: string;
+    keyName: string;
+    keyPrefix: string;
+    expiresAt: Date;
+    daysUntilExpiry: number;
+    rotateUrl: string;
+    apiKeyId: string;
+  }): Promise<void> {
+    await this.enqueue(
+      {
+        to: data.to,
+        subject: `API key expires in ${data.daysUntilExpiry} days`,
+        templateName: 'api-key-expiry-warning',
+        templateData: {
+          keyName: data.keyName,
+          keyPrefix: data.keyPrefix,
+          expiryDate: data.expiresAt.toISOString().slice(0, 10),
+          daysUntilExpiry: data.daysUntilExpiry,
+          rotateUrl: data.rotateUrl,
+        },
+        eventType: EmailEventType.API_KEY_EXPIRING,
+        recipientRole: 'merchant',
+      },
+      `api-key-expiry-${data.apiKeyId}-${data.daysUntilExpiry}`,
+    );
+  }
+
   async sendMerchantReport(
     to: string,
     summary: ReportSummary,
@@ -422,14 +450,15 @@ export class EmailNotificationService {
     });
   }
 
-  private async enqueue(data: SendEmailJobData): Promise<void> {
+  private async enqueue(data: SendEmailJobData, jobId?: string): Promise<void> {
     await this.emailQueue.add('send', data, {
+      ...(jobId ? { jobId } : {}),
       attempts: 3,
       backoff: {
         type: 'exponential',
         delay: 1000,
       },
-      removeOnComplete: true,
+      removeOnComplete: jobId ? { age: 30 * 24 * 60 * 60 } : true,
       removeOnFail: false,
     });
   }

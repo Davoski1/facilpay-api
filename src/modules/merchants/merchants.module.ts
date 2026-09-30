@@ -18,6 +18,6 @@ import { AuditLogsModule } from '../audit-logs/audit-logs.module';
   ],
   controllers: [MerchantsController],
   providers: [MerchantsService, GeoLookupService],
-  exports: [MerchantsService],
+  exports: [MerchantsService, GeoLookupService],
 })
 export class MerchantsModule {}
