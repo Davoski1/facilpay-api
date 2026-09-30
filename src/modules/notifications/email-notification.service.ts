@@ -567,4 +567,62 @@ export class EmailNotificationService {
       locale,
     });
   }
+
+  async sendRefundApprovalRequested(
+    to: string,
+    paymentId: string,
+    refundId: string,
+    amount: string,
+    currency: string,
+    initiatedBy: string | null,
+  ): Promise<void> {
+    await this.enqueue({
+      to,
+      subject: `Refund Approval Required: ${amount} ${currency}`,
+      templateName: 'refund-approval-requested',
+      templateData: {
+        paymentId,
+        refundId,
+        refundAmount: amount,
+        refundCurrency: currency,
+        initiatedBy: initiatedBy || 'system',
+      },
+      eventType: EmailEventType.REFUND_APPROVAL_REQUESTED,
+      recipientRole: 'merchant',
+      paymentId,
+      refundId,
+    });
+  }
+
+  async sendRefundApprovalOutcome(
+    to: string,
+    paymentId: string,
+    refundId: string,
+    amount: string,
+    currency: string,
+    approved: boolean,
+    rejectionReason?: string | null,
+  ): Promise<void> {
+    const eventType = approved
+      ? EmailEventType.REFUND_APPROVED
+      : EmailEventType.REFUND_REJECTED;
+    await this.enqueue({
+      to,
+      subject: approved
+        ? `Refund Approved: ${amount} ${currency}`
+        : `Refund Rejected: ${amount} ${currency}`,
+      templateName: approved ? 'refund-approved' : 'refund-rejected',
+      templateData: {
+        paymentId,
+        refundId,
+        refundAmount: amount,
+        refundCurrency: currency,
+        rejectionReason: rejectionReason || undefined,
+      },
+      eventType,
+      recipientRole: 'merchant',
+      paymentId,
+      refundId,
+    });
+  }
 }
