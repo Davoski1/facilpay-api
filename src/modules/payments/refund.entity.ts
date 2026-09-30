@@ -5,6 +5,7 @@ import {
   CreateDateColumn,
   ManyToOne,
   JoinColumn,
+  Index,
 } from 'typeorm';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Payment } from './payment.entity';
@@ -68,6 +69,7 @@ export class Refund {
   @ApiPropertyOptional({ description: 'User ID or system actor that initiated the refund' })
   initiatedBy: string | null;
 
+  @Index()
   @CreateDateColumn()
   @ApiProperty()
   createdAt: Date;

@@ -4,6 +4,7 @@ import {
   Column,
   CreateDateColumn,
   UpdateDateColumn,
+  Index,
 } from 'typeorm';
 import { UserRole } from '../../common/constants/roles';
 
@@ -73,6 +74,7 @@ export class User {
   @Column({ nullable: true })
   rateLimitTtl: number | null = null;
 
+  @Index()
   @CreateDateColumn()
   createdAt: Date;
 

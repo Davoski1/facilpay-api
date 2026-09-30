@@ -32,6 +32,8 @@ import { AnalyticsModule } from './modules/analytics/analytics.module';
 import { InvoicesModule } from './modules/invoices/invoices.module';
 import { CouponsModule } from './modules/coupons/coupons.module';
 
+import { AdminMetricsModule } from './modules/admin/admin-metrics.module';
+
 @Module({
   imports: [
     ConfigModule.forRoot({ isGlobal: true }),
@@ -68,6 +70,7 @@ import { CouponsModule } from './modules/coupons/coupons.module';
     AnalyticsModule,
     InvoicesModule,
     CouponsModule,
+    AdminMetricsModule,
   ],
   controllers: [AppController],
   providers: [AppService],
